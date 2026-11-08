@@ -3,7 +3,13 @@ import asyncio
 from collections import OrderedDict
 from datetime import timedelta
 
+from dotenv import load_dotenv
 import discord
+
+# Load Wispbyte's .env file before reading any environment variables.
+# With the server working directory set to /home/container, this loads
+# /home/container/.env without hard-coding a hosting-specific path.
+load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1563997203377426623"))
@@ -424,6 +430,9 @@ async def on_message_edit(before, after):
 
 
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN environment variable is missing.")
+    raise RuntimeError(
+        "BOT_TOKEN is missing. Check that Wispbyte's .env file is in the "
+        "server's working directory and contains BOT_TOKEN=your_token."
+    )
 
 bot.run(TOKEN)
