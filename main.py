@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 from collections import OrderedDict
 from datetime import timedelta
 
@@ -31,6 +32,9 @@ EMOJIS = {
 }
 MAX_MESSAGE_CACHE = 5000
 AUDIT_LOOKBACK_SECONDS = 30
+DUPLICATE_WINDOW_SECONDS = 60
+DUPLICATE_GIF_URL = "https://media.tenor.com/QTG7rHOz300AAAAM/goku-namek.gif"
+MIN_DUPLICATE_LENGTH = 12
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -41,6 +45,8 @@ bot = discord.Client(intents=intents)
 
 # In-memory only: message contents are not persisted across restarts.
 message_cache = OrderedDict()
+# Tracks recent messages by server, channel, and normalized text.
+recent_messages = {}
 
 
 def shorten(value, limit=1024):
@@ -319,6 +325,55 @@ async def on_member_update(before, after):
 async def on_message(message):
     if message.guild is None or message.author.bot:
         return
+
+    # Detect another member repeating the same text in the same channel.
+    # Case and extra whitespace are ignored when comparing messages.
+    normalized = " ".join(message.content.casefold().split())
+
+    if len(normalized) >= MIN_DUPLICATE_LENGTH:
+        now = time.monotonic()
+
+        # Remove expired entries so this stays small over time.
+        expired = [
+            key for key, value in recent_messages.items()
+            if now - value["time"] > DUPLICATE_WINDOW_SECONDS
+        ]
+        for key in expired:
+            recent_messages.pop(key, None)
+
+        duplicate_key = (message.guild.id, message.channel.id, normalized)
+        previous = recent_messages.get(duplicate_key)
+
+        if (
+            previous is not None
+            and previous["author_id"] != message.author.id
+            and now - previous["time"] <= DUPLICATE_WINDOW_SECONDS
+        ):
+            try:
+                await message.delete()
+                await message.channel.send(
+                    DUPLICATE_GIF_URL,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                print(
+                    f"BRAX: Removed duplicate message from {message.author} "
+                    f"in #{message.channel}."
+                )
+            except discord.Forbidden:
+                print(
+                    "BRAX: Cannot remove duplicate message. "
+                    "Give the bot Manage Messages permission."
+                )
+            except discord.HTTPException as error:
+                print(f"BRAX: Duplicate-message action failed: {error}")
+            return
+
+        # Keep the first person's message as the original.
+        if previous is None:
+            recent_messages[duplicate_key] = {
+                "author_id": message.author.id,
+                "time": now,
+            }
 
     message_cache[message.id] = {
         "author": message.author,
