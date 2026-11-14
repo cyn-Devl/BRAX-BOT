@@ -1417,7 +1417,7 @@ async def moderation_log_command(ctx, channel: discord.TextChannel = None):
 
 
 @bot.command(name="timeout", aliases=["mute", "tempmute"])
-async def timeout_command(ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided"):
+async def timeout_command(ctx, member: discord.Member, duration: str, *, reason: str):
     if not await moderation_gate(ctx, "moderate_members"):
         return
     if member.id == ctx.author.id or member.bot:
@@ -1537,7 +1537,7 @@ async def role_add_command(ctx, member: discord.Member, role: discord.Role, *, r
         await ctx.reply(f"{EMOJIS['denied']} You can't assign a role equal to or above your highest role.", mention_author=False)
         return
     try:
-        await member.add_roles(role, reason=f"Role added by {ctx.author}")
+        await member.add_roles(role, reason=f"Role added by {ctx.author}: {reason}")
     except discord.Forbidden:
         await ctx.reply(f"{EMOJIS['denied']} I can't assign that role. Check Manage Roles and role hierarchy.", mention_author=False)
         return
@@ -1562,7 +1562,7 @@ async def role_remove_command(ctx, member: discord.Member, role: discord.Role, *
         await ctx.reply(f"{EMOJIS['denied']} {member.mention} doesn't have {role.mention}.", mention_author=False)
         return
     try:
-        await member.remove_roles(role, reason=f"Role removed by {ctx.author}")
+        await member.remove_roles(role, reason=f"Role removed by {ctx.author}: {reason}")
     except discord.Forbidden:
         await ctx.reply(f"{EMOJIS['denied']} I can't remove that role. Check Manage Roles and role hierarchy.", mention_author=False)
         return
@@ -1614,7 +1614,7 @@ async def brax_help_command(ctx):
     embed.add_field(
         name="🛡️ Moderation",
         value=(
-            "`b!timeout @user 10m reason` — Timeout a member (aliases: b!mute, b!tempmute). Durations: s, m, h, d, w (maximum 28 days).\n"
+            "`b!timeout @user 10m reason` — Timeout a member (aliases: b!mute, b!tempmute). Duration and reason are required; supports s, m, h, d, w (maximum 28 days).\n"
             "`b!untimeout @user [reason]` — Remove a timeout (aliases: b!unmute, b!removetimeout).\n"
             "`b!kick @user [reason]` — Kick a member.\n"
             "`b!ban @user [reason]` — Ban a member.\n"
