@@ -450,11 +450,15 @@ async def on_message(message):
         if has_blacklist(member, "Divine punishment")
     ]
     if message.mention_everyone or message.role_mentions:
+        mentioned_role_ids = {role.id for role in message.role_mentions}
         punished_members.extend(
             member for member in message.guild.members
             if has_blacklist(member, "Divine punishment")
             and member.id not in {item.id for item in punished_members}
-            and any(role.id in {r.id for r in message.role_mentions} for role in member.roles)
+            and (
+                message.mention_everyone
+                or any(role.id in mentioned_role_ids for role in member.roles)
+            )
         )
     for punished in punished_members:
         await send_user_warning(
