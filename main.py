@@ -76,14 +76,10 @@ DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS = {
     1369381936283389983, # theimpostorsyndrome/testo
     1276932593790484636, # bob061344/British guy
 }
-HIGH_STAFF_ROLE_NAMES = {
-    "developers", "senior admin", "admin", "trial admin",
-    "zinzicraftian admin", "senior moderator",
-}
-HIGH_STAFF_ROLE_IDS = {
-    int(value.strip())
-    for value in os.getenv("HIGH_STAFF_ROLE_IDS", "").split(",")
-    if value.strip().isdigit()
+BRAX_USAGE_ROLE_ID = 1571309152440025190
+USAGE_ROLE_GRANTER_IDS = {
+    1521469840970350632,  # Braxton
+    1511412885040009309,  # kaydnn
 }
 role_blacklist_warnings = {}
 BLACKLIST_ASSIGNMENTS_FILE = "blacklist_assignments.json"
@@ -133,10 +129,8 @@ def shorten(value, limit=1024):
 
 
 def is_high_staff(member):
-    return any(
-        role.id in HIGH_STAFF_ROLE_IDS or role.name.casefold() in HIGH_STAFF_ROLE_NAMES
-        for role in member.roles
-    )
+    """BRAX command access is granted only by the dedicated BRAX Usage role."""
+    return any(role.id == BRAX_USAGE_ROLE_ID for role in member.roles)
 
 
 def is_staff_role(role):
@@ -1047,12 +1041,12 @@ class BlacklistSelect(discord.ui.Select):
         if is_divine:
             if not is_divine_authorized:
                 await interaction.response.send_message(
-                    "Only the four authorized users can assign or remove Divine punishment.",
+                    "Only the six specifically authorized users can assign or remove Divine punishment.",
                     ephemeral=True,
                 )
                 return
         elif not is_high_staff(interaction.user):
-            await interaction.response.send_message("Only higher staff can use BRAX blacklist controls.", ephemeral=True)
+            await interaction.response.send_message("You need the BRAX Usage role to use regular blacklist controls.", ephemeral=True)
             return
 
         if not interaction.user.guild_permissions.manage_roles:
@@ -1103,7 +1097,7 @@ class BlacklistView(discord.ui.View):
 @bot.command(name="blacklist")
 async def blacklist_command(ctx, user: discord.Member):
     if not is_high_staff(ctx.author) and ctx.author.id not in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS:
-        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff and the authorized Divine punishment users.", mention_author=False)
+        await ctx.reply("You need the BRAX Usage role to use this command. The six Divine-authorized users may also open this menu for Divine punishment only.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_roles:
         await ctx.reply("You also need the **Manage Roles** permission.", mention_author=False)
@@ -1270,7 +1264,7 @@ class CloseReasonModal(discord.ui.Modal, title="Close ticket with a reason"):
 
 async def close_ticket_channel(interaction, reason=None):
     if not is_high_staff(interaction.user):
-        await interaction.response.send_message("Only higher staff can close tickets with BRAX.", ephemeral=True)
+        await interaction.response.send_message("You need the BRAX Usage role to close tickets with BRAX.", ephemeral=True)
         return
     channel = interaction.channel
     if not isinstance(channel, discord.TextChannel) or channel.category_id != TICKET_CATEGORY_ID:
@@ -1311,7 +1305,7 @@ class TicketControlsView(discord.ui.View):
     )
     async def claim(self, interaction, button):
         if not is_high_staff(interaction.user):
-            await interaction.response.send_message("Only higher staff can claim tickets with BRAX.", ephemeral=True)
+            await interaction.response.send_message("You need the BRAX Usage role to claim tickets with BRAX.", ephemeral=True)
             return
         if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
             await interaction.response.send_message("This isn't a ticket channel.", ephemeral=True)
@@ -1331,7 +1325,7 @@ class TicketControlsView(discord.ui.View):
     )
     async def close_reason(self, interaction, button):
         if not is_high_staff(interaction.user):
-            await interaction.response.send_message("Only higher staff can close tickets with BRAX.", ephemeral=True)
+            await interaction.response.send_message("You need the BRAX Usage role to close tickets with BRAX.", ephemeral=True)
             return
         await interaction.response.send_modal(CloseReasonModal())
 
@@ -1370,7 +1364,7 @@ def parse_timeout_duration(value):
 async def moderation_gate(ctx, permission_name):
     if not is_high_staff(ctx.author):
         await ctx.reply(
-            f"{EMOJIS['denied']} Only higher staff can use BRAX moderation commands.",
+            f"{EMOJIS['denied']} You need the BRAX Usage role to use BRAX moderation commands.",
             mention_author=False,
         )
         return False
@@ -1575,10 +1569,43 @@ async def role_remove_command(ctx, member: discord.Member, role: discord.Role, *
     await send_moderation_result(ctx, "Role Removed", member, reason)
 
 
+@bot.command(name="usageadd")
+async def usage_add_command(ctx, member: discord.Member):
+    if ctx.author.id not in USAGE_ROLE_GRANTER_IDS:
+        await ctx.reply("Only Braxton and kaydnn can grant the brax usage role.", mention_author=False)
+        return
+    if not ctx.author.guild_permissions.manage_roles:
+        await ctx.reply("You need the **Manage Roles** permission to grant brax usage.", mention_author=False)
+        return
+    role = ctx.guild.get_role(BRAX_USAGE_ROLE_ID)
+    if role is None:
+        await ctx.reply("The brax usage role could not be found. Check the configured role ID.", mention_author=False)
+        return
+    if role >= ctx.guild.me.top_role:
+        await ctx.reply("I can't assign brax usage because the role is above or equal to my highest role. Move BRAX above it.", mention_author=False)
+        return
+    if role in member.roles:
+        await ctx.reply(f"{member.mention} already has the brax usage role.", mention_author=False)
+        return
+    try:
+        await member.add_roles(role, reason=f"BRAX Usage access granted by {ctx.author}")
+    except discord.Forbidden:
+        await ctx.reply("I can't grant the brax usage role. Check my Manage Roles permission and role hierarchy.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"Couldn't grant the brax usage role: {error}", mention_author=False)
+        return
+    await ctx.reply(
+        f"{EMOJIS['confirmed']} {ctx.author.mention} gave {member.mention} <@&{BRAX_USAGE_ROLE_ID}>.",
+        mention_author=False,
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
+
+
 @bot.command(name="ticketpanel")
 async def ticket_panel_command(ctx):
     if not is_high_staff(ctx.author):
-        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
+        await ctx.reply("You need the BRAX Usage role to use BRAX commands.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_guild:
         await ctx.reply("You also need the **Manage Server** permission.", mention_author=False)
@@ -1604,14 +1631,9 @@ HELP_PAGES = [
     {
         "title": "BRAX • Command Access",
         "description": (
-            "BRAX commands use the **b!** prefix. The commands below are restricted "
-            "to the following higher staff roles:\n"
-            "• Developers\n"
-            "• Senior Admin\n"
-            "• Admin\n"
-            "• Trial Admin\n"
-            "• Zinzicraftian Admin\n"
-            "• Senior Moderator\n\n"
+            "BRAX commands use the **b!** prefix. All BRAX staff commands are restricted "
+            "to members with <@&1571309152440025190> (**brax usage**). Old staff-role names "
+            "and IDs no longer grant command access.\n\n"
             "**Special authorization**\n"
             "The six people listed below are specifically allowed to assign or remove "
             "the Divine punishment role:\n"
@@ -1621,14 +1643,17 @@ HELP_PAGES = [
             "• kaydnn — `1511412885040009309`\n"
             "• theimpostorsyndrome/testo — `1369381936283389983`\n"
             "• bob061344/British guy — `1276932593790484636`\n\n"
-            "Higher staff can use the regular blacklist menu. Divine punishment "
-            "assignment/removal is limited to those six accounts."
+            "Members with brax usage can use regular blacklist controls but cannot use "
+            "Divine punishment unless their user ID is separately on the authorization list. "
+            "The six authorized accounts can open the blacklist menu for Divine punishment only. "
+            "Only Braxton and kaydnn can grant the brax usage role with `b!usageadd @user`."
         ),
         "footer": "BRAX • Access Information",
     },
     {
         "title": "<a:Tools:1571303064256909482> Server Tools",
         "description": (
+            "`b!usageadd @user` — Give the brax usage role (Braxton and kaydnn only).\n"
             "`b!ticketpanel` — Post the ticket panel.\n"
             "`b!blacklist @user` — Open the blacklist menu.\n"
             "`b!help` — Open this interactive help menu.\n"
@@ -1727,7 +1752,7 @@ async def brax_help_command(ctx):
     if not is_high_staff(ctx.author):
         await ctx.reply(
             f"{EMOJIS['denied']} You don't have permission to use BRAX commands. "
-            "This is limited to higher staff.",
+            "You need the BRAX Usage role.",
             mention_author=False,
         )
         return
@@ -1739,23 +1764,23 @@ async def brax_help_command(ctx):
     )
 
 
-@bot.tree.command(name="help", description="Show BRAX commands for higher staff.")
+@bot.tree.command(name="help", description="Show BRAX commands for BRAX Usage role members.")
 async def brax_slash_help_command(interaction: discord.Interaction):
     if not is_high_staff(interaction.user):
         await interaction.response.send_message(
-            "You don't have permission to use BRAX commands. This is limited to higher staff.",
+            "You need the BRAX Usage role to use BRAX commands.",
             ephemeral=True,
         )
         return
     embed = discord.Embed(
         title="BRAX Commands",
-        description="Commands available to higher staff:",
+        description="Commands available to members with the BRAX Usage role:",
         color=discord.Color.from_rgb(58, 48, 35),
     )
     embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
     embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
     embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!help, /help", inline=False)
-    embed.set_footer(text="BRAX • Higher Staff Only")
+    embed.set_footer(text="BRAX • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1765,5 +1790,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: paginated-help-menu + moderation-commands + mlog")
+print("BRAX BUILD: brax-usage-role-access + usageadd + divine-allowlist + paginated-help-menu")
 bot.run(TOKEN)
