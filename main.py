@@ -1009,4 +1009,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
+print("BRAX BUILD: commands.Bot / slash-command support")
 bot.run(TOKEN)
