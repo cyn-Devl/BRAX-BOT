@@ -938,6 +938,9 @@ class CloseReasonModal(discord.ui.Modal, title="Close ticket with a reason"):
 
 
 async def close_ticket_channel(interaction, reason=None):
+    if not is_high_staff(interaction.user):
+        await interaction.response.send_message("Only higher staff can close tickets with BRAX.", ephemeral=True)
+        return
     channel = interaction.channel
     if not isinstance(channel, discord.TextChannel) or channel.category_id != TICKET_CATEGORY_ID:
         await interaction.response.send_message("This button can only be used inside a ticket.", ephemeral=True)
@@ -975,6 +978,9 @@ class TicketControlsView(discord.ui.View):
         custom_id="brax:tickets:claim",
     )
     async def claim(self, interaction, button):
+        if not is_high_staff(interaction.user):
+            await interaction.response.send_message("Only higher staff can claim tickets with BRAX.", ephemeral=True)
+            return
         if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
             await interaction.response.send_message("This isn't a ticket channel.", ephemeral=True)
             return
@@ -991,6 +997,9 @@ class TicketControlsView(discord.ui.View):
         custom_id="brax:tickets:close_reason",
     )
     async def close_reason(self, interaction, button):
+        if not is_high_staff(interaction.user):
+            await interaction.response.send_message("Only higher staff can close tickets with BRAX.", ephemeral=True)
+            return
         await interaction.response.send_modal(CloseReasonModal())
 
     @discord.ui.button(
