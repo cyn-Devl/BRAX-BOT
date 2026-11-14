@@ -73,6 +73,8 @@ DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS = {
     942862192867409941,  # eyeless
     1521469840970350632, # Braxton
     1511412885040009309, # kaydnn
+    1369381936283389983, # theimpostorsyndrome/testo
+    1276932593790484636, # bob061344/British guy
 }
 HIGH_STAFF_ROLE_NAMES = {
     "developers", "senior admin", "admin", "trial admin",
@@ -1623,7 +1625,7 @@ HELP_PAGES = [
         "footer": "BRAX • Access Information",
     },
     {
-        "title": "<:Tools:1571303064256909482> Server Tools",
+        "title": "<a:Tools:1571303064256909482> Server Tools",
         "description": (
             "`b!ticketpanel` — Post the ticket panel.\n"
             "`b!blacklist @user` — Open the blacklist menu.\n"
