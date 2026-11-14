@@ -759,8 +759,8 @@ class BlacklistSelect(discord.ui.Select):
         if role_id == BLACKLIST_ROLES["Suggestion blacklist"]:
             await apply_suggestion_restriction(self.target)
         await interaction.response.send_message(
-            f"Assigned **{role.name}** to {self.target.mention}.",
-            ephemeral=True,
+            f"{interaction.user.mention} gave **{role.name}** to {self.target.mention}.",
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
         )
 
 
