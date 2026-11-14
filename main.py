@@ -909,14 +909,25 @@ class BlacklistSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction):
-        if not is_high_staff(interaction.user):
+        role_id = int(self.values[0])
+        is_divine = role_id == BLACKLIST_ROLES["Divine punishment"]
+        is_divine_authorized = interaction.user.id in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS
+
+        if is_divine:
+            if not is_divine_authorized:
+                await interaction.response.send_message(
+                    "Only the four authorized users can assign or remove Divine punishment.",
+                    ephemeral=True,
+                )
+                return
+        elif not is_high_staff(interaction.user):
             await interaction.response.send_message("Only higher staff can use BRAX blacklist controls.", ephemeral=True)
             return
+
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("You need Manage Roles to use this.", ephemeral=True)
             return
         guild = interaction.guild
-        role_id = int(self.values[0])
         role = guild.get_role(role_id)
         if role is None:
             await interaction.response.send_message("That blacklist role could not be found.", ephemeral=True)
@@ -959,8 +970,8 @@ class BlacklistView(discord.ui.View):
 
 @bot.command(name="blacklist")
 async def blacklist_command(ctx, user: discord.Member):
-    if not is_high_staff(ctx.author):
-        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
+    if not is_high_staff(ctx.author) and ctx.author.id not in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS:
+        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff and the authorized Divine punishment users.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_roles:
         await ctx.reply("You also need the **Manage Roles** permission.", mention_author=False)
