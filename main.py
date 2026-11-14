@@ -1598,49 +1598,141 @@ async def ticket_panel_command(ctx):
         await ctx.reply("I need View Channel, Send Messages, and Embed Links there.", mention_author=False)
 
 
+HELP_PAGES = [
+    {
+        "title": "BRAX • Command Access",
+        "description": (
+            "BRAX commands use the **b!** prefix. The commands below are restricted "
+            "to the following higher staff roles:\n"
+            "• Developers\n"
+            "• Senior Admin\n"
+            "• Admin\n"
+            "• Trial Admin\n"
+            "• Zinzicraftian Admin\n"
+            "• Senior Moderator\n\n"
+            "**Special authorization**\n"
+            "The four people listed below are specifically allowed to assign or remove "
+            "the Divine punishment role:\n"
+            "• noobidbody — \`781537035428429866\`\n"
+            "• eyeless — \`942862192867409941\`\n"
+            "• Braxton — \`1521469840970350632\`\n"
+            "• kaydnn — \`1511412885040009309\`\n\n"
+            "Higher staff can use the regular blacklist menu. Divine punishment "
+            "assignment/removal is limited to those four accounts."
+        ),
+        "footer": "BRAX • Access Information",
+    },
+    {
+        "title": "<:Tools:1571303064256909482> Server Tools",
+        "description": (
+            "\`b!ticketpanel\` — Post the ticket panel.\n"
+            "\`b!blacklist @user\` — Open the blacklist menu.\n"
+            "\`b!help\` — Open this interactive help menu.\n"
+            "\`/help\` — Show help privately."
+        ),
+        "footer": "BRAX • Server Tools",
+    },
+    {
+        "title": "<:Moderation:1571302568070611045> Moderation",
+        "description": (
+            "\`b!timeout @user 10m reason\` — Timeout a member. Aliases: \`b!mute\`, \`b!tempmute\`. "
+            "Duration and reason are required; supports s, m, h, d, w (maximum 28 days).\n"
+            "\`b!untimeout @user [reason]\` — Remove a timeout. Aliases: \`b!unmute\`, \`b!removetimeout\`.\n"
+            "\`b!kick @user [reason]\` — Kick a member.\n"
+            "\`b!ban @user [reason]\` — Ban a member.\n"
+            "\`b!unban userID [reason]\` — Unban by user ID.\n"
+            "\`b!roleadd @user @role [reason]\` — Give a role. Alias: \`b!addrole\`.\n"
+            "\`b!roleremove @user @role [reason]\` — Remove a role. Alias: \`b!removerole\`."
+        ),
+        "footer": "BRAX • Moderation",
+    },
+    {
+        "title": "<:Logging:1571302754272542852> Logging",
+        "description": (
+            "\`b!mlog [#channel]\` — Set the moderation log channel. "
+            "If no channel is supplied, BRAX uses the channel where you run the command.\n\n"
+            "Moderation actions are recorded with the affected member, moderator, "
+            "reason, and timeout duration when applicable."
+        ),
+        "footer": "BRAX • Logging",
+    },
+]
+
+
+def make_help_embed(page_index):
+    page = HELP_PAGES[page_index]
+    embed = discord.Embed(
+        title=page["title"],
+        description=page["description"],
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    embed.set_footer(text=f'{page["footer"]} • Page {page_index + 1}/{len(HELP_PAGES)}')
+    return embed
+
+
+class BraxHelpView(discord.ui.View):
+    def __init__(self, author_id):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.page = 0
+        self.back_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=discord.PartialEmoji.from_str("<:Backwards:1571304371646632077>"),
+            custom_id="brax:help:back",
+            disabled=True,
+        )
+        self.forward_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=discord.PartialEmoji.from_str("<:Forward:1571304228255957133>"),
+            custom_id="brax:help:forward",
+            disabled=False,
+        )
+        self.back_button.callback = self.go_back
+        self.forward_button.callback = self.go_forward
+        self.add_item(self.back_button)
+        self.add_item(self.forward_button)
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "Only the person who opened this help menu can turn its pages.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def update_page(self, interaction):
+        self.back_button.disabled = self.page == 0
+        self.forward_button.disabled = self.page == len(HELP_PAGES) - 1
+        await interaction.response.edit_message(
+            embed=make_help_embed(self.page),
+            view=self,
+        )
+
+    async def go_back(self, interaction):
+        self.page = max(0, self.page - 1)
+        await self.update_page(interaction)
+
+    async def go_forward(self, interaction):
+        self.page = min(len(HELP_PAGES) - 1, self.page + 1)
+        await self.update_page(interaction)
+
+
 @bot.command(name="help")
 async def brax_help_command(ctx):
     if not is_high_staff(ctx.author):
-        await ctx.reply(f"{EMOJIS['denied']} You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
+        await ctx.reply(
+            f"{EMOJIS['denied']} You don't have permission to use BRAX commands. "
+            "This is limited to higher staff.",
+            mention_author=False,
+        )
         return
-    embed = discord.Embed(
-        title=f"{EMOJIS['link']} BRAX • Command Help",
-        description=(
-            "A server moderation and management bot.\n"
-            "Use the commands below with the **b!** prefix. Replace the examples with real members, roles, and reasons."
-        ),
-        color=discord.Color.from_rgb(58, 48, 35),
+    view = BraxHelpView(ctx.author.id)
+    await ctx.reply(
+        embed=make_help_embed(0),
+        view=view,
+        mention_author=False,
     )
-    embed.add_field(
-        name="🛡️ Moderation",
-        value=(
-            "`b!timeout @user 10m reason` — Timeout a member (aliases: b!mute, b!tempmute). Duration and reason are required; supports s, m, h, d, w (maximum 28 days).\n"
-            "`b!untimeout @user [reason]` — Remove a timeout (aliases: b!unmute, b!removetimeout).\n"
-            "`b!kick @user [reason]` — Kick a member.\n"
-            "`b!ban @user [reason]` — Ban a member.\n"
-            "`b!unban userID [reason]` — Unban by user ID.\n"
-            "`b!roleadd @user @role` — Give a role.\n"
-            "`b!roleremove @user @role` — Remove a role."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="📋 Logging",
-        value="`b!mlog [#channel]` — Set the moderation log channel. If omitted, uses the channel where you run the command.",
-        inline=False,
-    )
-    embed.add_field(
-        name="⚙️ Server Tools",
-        value=(
-            "`b!ticketpanel` — Post the ticket panel.\n"
-            "`b!blacklist @user` — Open the blacklist menu.\n"
-            "`b!help` — Show this help menu.\n"
-            "`/help` — Show help privately."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="BRAX • Higher Staff Commands")
-    await ctx.reply(embed=embed, mention_author=False)
 
 
 @bot.tree.command(name="help", description="Show BRAX commands for higher staff.")
