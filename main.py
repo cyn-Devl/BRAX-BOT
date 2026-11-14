@@ -7,6 +7,9 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import discord
 
+from collections import deque
+from discord import app_commands
+
 # Load Wispbyte's .env file before reading any environment variables.
 # With the server working directory set to /home/container, this loads
 # /home/container/.env without hard-coding a hosting-specific path.
@@ -35,6 +38,33 @@ AUDIT_LOOKBACK_SECONDS = 30
 DUPLICATE_WINDOW_SECONDS = 60
 DUPLICATE_GIF_URL = "https://media.tenor.com/QTG7rHOz300AAAAM/goku-namek.gif"
 MIN_DUPLICATE_LENGTH = 12
+
+# BRAX blacklist and ticket configuration
+BLACKLIST_ROLES = {
+    "Suggestion blacklist": 1571274114881167601,
+    "Application blacklist": 1564081888123953152,
+    "Image blacklist": 1571274714414973009,
+    "Role blacklist": 1570618973731688468,
+    "Staff blacklist": 1570148574480830626,
+}
+GENERAL_CHANNEL_ID = 1561145710361976882
+SUGGESTION_CHANNEL_ID = 1517259302459543714
+MEDIA_CHANNEL_ID = 1561145636559003749
+TICKETS_CHANNEL_ID = 1561188845154865173
+TICKET_CATEGORY_ID = 1561150725588000808
+TICKET_STAFF_ROLE_ID = 1563998176187260949
+TICKET_EMOJIS = {
+    "open": "<:Ticket:1571278544041156668>",
+    "claim": "<a:Claim:1571281287853907978>",
+    "reason": "<a:Reason:1571280404714098729>",
+    "close": "<:Lock:1571279856690266213>",
+}
+STAFF_ROLE_NAMES = {
+    "developers", "senior admin", "admin", "trial admin",
+    "zinzicraftian admin", "senior moderator", "moderator",
+    "trial moderator", "ingame admin", "ingame moderator",
+}
+role_blacklist_warnings = {}
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -326,6 +356,31 @@ async def on_message(message):
     if message.guild is None or message.author.bot:
         return
 
+    # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
+    member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
+    if message.channel.id == MEDIA_CHANNEL_ID and member and has_blacklist(member, "Image blacklist"):
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+        await send_user_warning(message.guild, member, "You're Image blacklisted, you can't do that buddy")
+        return
+
+    if message.channel.id == GENERAL_CHANNEL_ID and member and has_blacklist(member, "Image blacklist") and message_has_image(message):
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+        await send_user_warning(message.guild, member, "You're Image blacklisted, you can't do that buddy")
+        return
+
+    if message.channel.id == SUGGESTION_CHANNEL_ID and member and has_blacklist(member, "Suggestion blacklist"):
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+        return
+
     # Detect another member repeating the same text in the same channel.
     # Case and extra whitespace are ignored when comparing messages.
     normalized = " ".join(message.content.casefold().split())
@@ -482,6 +537,470 @@ async def on_message_edit(before, after):
             inline=False,
         )
     await send_log(embed)
+
+
+
+# ---------------- BLACKLISTS + TICKETS ----------------
+
+def has_blacklist(member, label):
+    role_id = BLACKLIST_ROLES[label]
+    return any(role.id == role_id for role in member.roles)
+
+
+def message_has_image(message):
+    image_types = ("image/",)
+    for attachment in message.attachments:
+        content_type = (attachment.content_type or "").lower()
+        filename = attachment.filename.lower()
+        if content_type.startswith(image_types) or filename.endswith(
+            (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif")
+        ):
+            return True
+    text = (message.content or "").lower()
+    return any(
+        marker in text for marker in (
+            ".gif", ".png", ".jpg", ".jpeg", ".webp",
+            "tenor.com/view/", "giphy.com/gifs/", "media.tenor.com/",
+        )
+    )
+
+
+async def send_user_warning(guild, member, text):
+    channel = guild.get_channel(GENERAL_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(GENERAL_CHANNEL_ID)
+        except discord.HTTPException:
+            return
+    try:
+        await channel.send(
+            f"{member.mention} {text}",
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+        )
+    except discord.HTTPException as error:
+        print(f"BRAX: Could not send blacklist warning: {error}")
+
+
+async def apply_suggestion_restriction(member):
+    channel = member.guild.get_channel(SUGGESTION_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await member.guild.fetch_channel(SUGGESTION_CHANNEL_ID)
+        except discord.HTTPException:
+            return
+    if not isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+        return
+    if has_blacklist(member, "Suggestion blacklist"):
+        overwrite = channel.overwrites_for(member)
+        overwrite.view_channel = False
+        overwrite.send_messages = False
+        overwrite.add_reactions = False
+        overwrite.create_public_threads = False
+        overwrite.send_messages_in_threads = False
+        try:
+            await channel.set_permissions(member, overwrite=overwrite, reason="Suggestion blacklist")
+        except discord.HTTPException as error:
+            print(f"BRAX: Could not apply suggestion restriction: {error}")
+    else:
+        try:
+            await channel.set_permissions(member, overwrite=None, reason="Suggestion blacklist removed")
+        except discord.HTTPException as error:
+            print(f"BRAX: Could not clear suggestion restriction: {error}")
+
+
+def is_protected_staff_role(role):
+    return role.name.casefold() in STAFF_ROLE_NAMES or is_staff_role(role)
+
+
+async def handle_blacklisted_role_changes(before, after, added_roles):
+    if not added_roles:
+        return
+
+    role_blacklisted = has_blacklist(after, "Role blacklist")
+    staff_blacklisted = has_blacklist(after, "Staff blacklist")
+    denied = []
+    if role_blacklisted:
+        denied.extend(
+            role for role in added_roles
+            if role.id not in BLACKLIST_ROLES.values()
+            and role != after.guild.default_role
+        )
+    elif staff_blacklisted:
+        denied.extend(
+            role for role in added_roles
+            if role.id not in BLACKLIST_ROLES.values()
+            and role != after.guild.default_role
+            and is_protected_staff_role(role)
+        )
+
+    if not denied:
+        return
+
+    try:
+        await after.remove_roles(*denied, reason="BRAX blacklist enforcement")
+    except discord.Forbidden:
+        print("BRAX: Cannot remove blacklisted role(s). Move BRAX above those roles and grant Manage Roles.")
+        return
+    except discord.HTTPException as error:
+        print(f"BRAX: Failed to remove blacklisted role(s): {error}")
+        return
+
+    if role_blacklisted:
+        now = time.monotonic()
+        recent = role_blacklist_warnings.setdefault(after.id, deque())
+        while recent and now - recent[0] >= 86400:
+            recent.popleft()
+        if len(recent) < 2:
+            recent.append(now)
+            await send_user_warning(
+                after.guild,
+                after,
+                "you're role blacklisted, you can't get anymore roles",
+            )
+
+
+@bot.listen("on_member_update")
+async def blacklist_member_update(before, after):
+    before_ids = {role.id for role in before.roles}
+    added = [role for role in after.roles if role.id not in before_ids]
+    await handle_blacklisted_role_changes(before, after, added)
+
+    had_suggestion = any(r.id == BLACKLIST_ROLES["Suggestion blacklist"] for r in before.roles)
+    has_suggestion = has_blacklist(after, "Suggestion blacklist")
+    if had_suggestion != has_suggestion:
+        await apply_suggestion_restriction(after)
+
+
+@bot.listen("on_raw_reaction_add")
+async def block_blacklisted_suggestion_reactions(payload):
+    if payload.guild_id is None or payload.channel_id != SUGGESTION_CHANNEL_ID:
+        return
+    guild = bot.get_guild(payload.guild_id)
+    member = guild.get_member(payload.user_id) if guild else None
+    if member is None or member.bot or not has_blacklist(member, "Suggestion blacklist"):
+        return
+    try:
+        channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
+        message = await channel.fetch_message(payload.message_id)
+        await message.remove_reaction(payload.emoji, member)
+    except discord.HTTPException:
+        pass
+
+
+class BlacklistSelect(discord.ui.Select):
+    def __init__(self, target):
+        self.target = target
+        options = [
+            discord.SelectOption(label=name, value=str(role_id), description=f"Give {name}")
+            for name, role_id in BLACKLIST_ROLES.items()
+        ]
+        super().__init__(
+            placeholder="Choose which blacklist to give",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="brax:blacklist:select",
+        )
+
+    async def callback(self, interaction):
+        if not interaction.user.guild_permissions.manage_roles:
+            await interaction.response.send_message("You need Manage Roles to use this.", ephemeral=True)
+            return
+        guild = interaction.guild
+        role_id = int(self.values[0])
+        role = guild.get_role(role_id)
+        if role is None:
+            await interaction.response.send_message("That blacklist role could not be found.", ephemeral=True)
+            return
+        try:
+            await self.target.add_roles(role, reason=f"Blacklist assigned by {interaction.user}")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I can't assign that role. Move BRAX above the blacklist roles and grant Manage Roles.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as error:
+            await interaction.response.send_message(f"Couldn't assign the role: {error}", ephemeral=True)
+            return
+        if role_id == BLACKLIST_ROLES["Suggestion blacklist"]:
+            await apply_suggestion_restriction(self.target)
+        await interaction.response.send_message(
+            f"Assigned **{role.name}** to {self.target.mention}.",
+            ephemeral=True,
+        )
+
+
+class BlacklistView(discord.ui.View):
+    def __init__(self, target):
+        super().__init__(timeout=180)
+        self.add_item(BlacklistSelect(target))
+
+
+@bot.tree.command(name="blacklist", description="Give a member a selected blacklist role.")
+@app_commands.describe(user="The member who should receive a blacklist")
+@app_commands.default_permissions(manage_roles=True)
+async def blacklist_command(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.manage_roles:
+        await interaction.response.send_message("You need Manage Roles to use this.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"Choose a blacklist to give to {user.mention}:",
+        view=BlacklistView(user),
+        ephemeral=True,
+    )
+
+
+# Ticket panel: button opens an ephemeral dropdown.
+class TicketOpenButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Open Ticket",
+            style=discord.ButtonStyle.secondary,
+            emoji=discord.PartialEmoji.from_str(TICKET_EMOJIS["open"]),
+            custom_id="brax:tickets:open",
+        )
+
+    async def callback(self, interaction):
+        await interaction.response.send_message(
+            "What do you need?",
+            view=TicketTypeView(),
+            ephemeral=True,
+        )
+
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketOpenButton())
+
+
+class TicketTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Reporting", value="report", description="Report a member or issue"),
+            discord.SelectOption(label="Appeals", value="appeal", description="Appeal a punishment"),
+            discord.SelectOption(label="Applying for a role", value="roleapply", description="Apply for a server role"),
+            discord.SelectOption(label="Bug issue", value="bug", description="Report a bug"),
+        ]
+        super().__init__(
+            placeholder="What do you need?",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="brax:tickets:type",
+        )
+
+    async def callback(self, interaction):
+        member = interaction.user
+        if self.values[0] == "roleapply" and has_blacklist(member, "Application blacklist"):
+            await interaction.response.send_message(
+                "You're application blacklisted, so you can't open an application ticket.",
+                ephemeral=True,
+            )
+            return
+
+        guild = interaction.guild
+        category = guild.get_channel(TICKET_CATEGORY_ID)
+        if not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message(
+                "The configured ticket category wasn't found. Please tell an administrator.",
+                ephemeral=True,
+            )
+            return
+
+        prefix = {
+            "report": "Reports",
+            "appeal": "Appeal",
+            "roleapply": "roleapply",
+            "bug": "bug",
+        }[self.values[0]]
+        existing_numbers = []
+        for channel in category.text_channels:
+            name = channel.name
+            if name.startswith(prefix + "-"):
+                suffix = name[len(prefix) + 1:]
+                if suffix.isdigit():
+                    existing_numbers.append(int(suffix))
+        number = max(existing_numbers, default=0) + 1
+        channel_name = f"{prefix}-{number}"
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                attach_files=True, embed_links=True,
+            ),
+        }
+        staff_role = guild.get_role(TICKET_STAFF_ROLE_ID)
+        if staff_role:
+            overwrites[staff_role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                manage_messages=True,
+            )
+        if guild.me:
+            overwrites[guild.me] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                manage_channels=True, manage_messages=True,
+            )
+
+        try:
+            ticket = await guild.create_text_channel(
+                channel_name,
+                category=category,
+                overwrites=overwrites,
+                topic=f"Ticket opened by {member} ({member.id}) • Type: {self.values[0]}",
+                reason=f"Ticket opened by {member}",
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need Manage Channels and permission to view the ticket category.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as error:
+            await interaction.response.send_message(f"Couldn't create the ticket: {error}", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="Ticket opened",
+            description="Thank you for opening a ticket we will be here shortly",
+            color=discord.Color.blurple(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Opened by", value=member.mention, inline=True)
+        embed.add_field(name="Type", value=self.values[0].replace("roleapply", "Applying for a role").title(), inline=True)
+        ticket_message = await ticket.send(
+            content=f"|| <@&{TICKET_STAFF_ROLE_ID}> ||",
+            embed=embed,
+            view=TicketControlsView(),
+            allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+        )
+        await interaction.response.send_message(
+            f"Your ticket has been created: {ticket.mention}",
+            ephemeral=True,
+        )
+
+
+class TicketTypeView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(TicketTypeSelect())
+
+
+class CloseReasonModal(discord.ui.Modal, title="Close ticket with a reason"):
+    reason = discord.ui.TextInput(
+        label="Reason",
+        placeholder="Enter the reason for closing this ticket",
+        style=discord.TextStyle.paragraph,
+        max_length=1000,
+        required=True,
+    )
+
+    async def on_submit(self, interaction):
+        await close_ticket_channel(interaction, str(self.reason))
+
+
+async def close_ticket_channel(interaction, reason=None):
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel) or channel.category_id != TICKET_CATEGORY_ID:
+        await interaction.response.send_message("This button can only be used inside a ticket.", ephemeral=True)
+        return
+    try:
+        everyone = channel.guild.default_role
+        overwrite = channel.overwrites_for(everyone)
+        overwrite.send_messages = False
+        await channel.set_permissions(everyone, overwrite=overwrite, reason="Ticket closed")
+        for target, target_overwrite in list(channel.overwrites.items()):
+            if isinstance(target, discord.Member):
+                target_overwrite.send_messages = False
+                await channel.set_permissions(target, overwrite=target_overwrite, reason="Ticket closed")
+        suffix = channel.name
+        if not suffix.startswith("closed-"):
+            await channel.edit(name=f"closed-{suffix}"[:100])
+        text = "This ticket has been closed."
+        if reason:
+            text += f"\n**Reason:** {reason}"
+        await interaction.response.send_message(text)
+    except discord.Forbidden:
+        await interaction.response.send_message("I need Manage Channels to close this ticket.", ephemeral=True)
+    except discord.HTTPException as error:
+        await interaction.response.send_message(f"Couldn't close the ticket: {error}", ephemeral=True)
+
+
+class TicketControlsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Claim",
+        style=discord.ButtonStyle.primary,
+        emoji=discord.PartialEmoji.from_str(TICKET_EMOJIS["claim"]),
+        custom_id="brax:tickets:claim",
+    )
+    async def claim(self, interaction, button):
+        if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
+            await interaction.response.send_message("This isn't a ticket channel.", ephemeral=True)
+            return
+        message = interaction.message
+        embed = message.embeds[0] if message.embeds else discord.Embed(title="Ticket opened")
+        embed.description = "Thank you for opening a ticket we will be here shortly\n\n" + f"**This ticket has been claimed by {interaction.user.mention}.**"
+        await message.edit(embed=embed, view=self)
+        await interaction.response.send_message("Ticket claimed.", ephemeral=True)
+
+    @discord.ui.button(
+        label="Close with a reason",
+        style=discord.ButtonStyle.secondary,
+        emoji=discord.PartialEmoji.from_str(TICKET_EMOJIS["reason"]),
+        custom_id="brax:tickets:close_reason",
+    )
+    async def close_reason(self, interaction, button):
+        await interaction.response.send_modal(CloseReasonModal())
+
+    @discord.ui.button(
+        label="Close",
+        style=discord.ButtonStyle.danger,
+        emoji=discord.PartialEmoji.from_str(TICKET_EMOJIS["close"]),
+        custom_id="brax:tickets:close",
+    )
+    async def close(self, interaction, button):
+        await close_ticket_channel(interaction)
+
+
+@bot.tree.command(name="ticketpanel", description="Post the BRAX ticket panel.")
+@app_commands.default_permissions(manage_guild=True)
+async def ticket_panel_command(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_guild:
+        await interaction.response.send_message("You need Manage Server to post the ticket panel.", ephemeral=True)
+        return
+    channel = interaction.guild.get_channel(TICKETS_CHANNEL_ID)
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message("The configured ticket panel channel wasn't found.", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title="Open a ticket",
+        description="Click the button below to open a ticket so we can see what you need",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    embed.set_footer(text="Braxton Lwk had this idea")
+    try:
+        await channel.send(embed=embed, view=TicketPanelView())
+        await interaction.response.send_message(f"Ticket panel posted in {channel.mention}.", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("I need View Channel, Send Messages, and Embed Links there.", ephemeral=True)
+
+
+@bot.listen("on_ready")
+async def register_brax_views_and_commands():
+    if not getattr(bot, "_brax_synced", False):
+        bot.add_view(TicketPanelView())
+        bot.add_view(TicketControlsView())
+        try:
+            synced = await bot.tree.sync()
+            print(f"BRAX: Synced {len(synced)} slash commands.")
+        except discord.HTTPException as error:
+            print(f"BRAX: Slash-command sync failed: {error}")
+        bot._brax_synced = True
 
 
 if not TOKEN:
