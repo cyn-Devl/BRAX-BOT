@@ -1761,5 +1761,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: moderation-commands + sapphire-style-help + mlog")
+print("BRAX BUILD: paginated-help-menu + moderation-commands + mlog")
 bot.run(TOKEN)
