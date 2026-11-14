@@ -821,6 +821,8 @@ class TicketTypeSelect(discord.ui.Select):
         existing_numbers = []
         for channel in category.text_channels:
             name = channel.name
+            if name.startswith("closed-"):
+                name = name[len("closed-"):]
             if name.startswith(prefix + "-"):
                 suffix = name[len(prefix) + 1:]
                 if suffix.isdigit():
