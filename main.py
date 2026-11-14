@@ -382,9 +382,14 @@ async def on_member_update(before, after):
     )
     actor = entry.user if entry else None
 
-    # Blacklist roles are protected. Divine punishment has a separate fixed allowlist.
+    # Blacklist roles are protected. Ignore other blacklist roles removed
+    # automatically while BRAX is applying Divine punishment (which strips
+    # every other role after adding the Divine punishment role).
+    divine_is_active = has_blacklist(after, "Divine punishment")
     for role in removed:
         if role.id not in BLACKLIST_ROLES.values():
+            continue
+        if divine_is_active and role.id != BLACKLIST_ROLES["Divine punishment"]:
             continue
 
         key = blacklist_assignment_key(after.guild.id, after.id, role.id)
@@ -495,29 +500,6 @@ async def on_member_update(before, after):
 async def on_message(message):
     if message.guild is None or (bot.user is not None and message.author.id == bot.user.id):
         return
-
-    # Any ping/mention directed at a Divine-punished member triggers a public notice,
-    # including bot-generated level-up or command-response messages.
-    punished_members = [
-        member for member in message.mentions
-        if has_blacklist(member, "Divine punishment")
-    ]
-    if message.mention_everyone or message.role_mentions:
-        mentioned_role_ids = {role.id for role in message.role_mentions}
-        punished_members.extend(
-            member for member in message.guild.members
-            if has_blacklist(member, "Divine punishment")
-            and member.id not in {item.id for item in punished_members}
-            and (
-                message.mention_everyone
-                or any(role.id in mentioned_role_ids for role in member.roles)
-            )
-        )
-    for punished in punished_members:
-        await send_user_warning(
-            message.guild, punished,
-            "you have been noticed while under Divine punishment 🙏",
-        )
 
     if message.author.bot:
         return
@@ -757,14 +739,17 @@ async def apply_divine_punishment(member):
         print("BRAX: Divine punishment role was not found.")
         return
     try:
+        # Add Divine punishment first so the role-update listener knows that
+        # subsequent role removals are part of BRAX's own punishment process.
+        if role not in member.roles:
+            await member.add_roles(role, reason="BRAX Divine punishment")
+
         other_roles = [
             existing for existing in member.roles
             if existing != member.guild.default_role and existing.id != role.id
         ]
         if other_roles:
             await member.remove_roles(*other_roles, reason="BRAX Divine punishment: remove other roles")
-        if role not in member.roles:
-            await member.add_roles(role, reason="BRAX Divine punishment")
     except discord.HTTPException as error:
         print(f"BRAX: Could not fully apply Divine punishment roles: {error}")
 
