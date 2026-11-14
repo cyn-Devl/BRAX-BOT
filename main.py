@@ -679,7 +679,7 @@ async def handle_blacklisted_role_changes(before, after, added_roles):
 
 @bot.event
 
-async def block_blacklisted_suggestion_reactions(payload):
+async def on_raw_reaction_add(payload):
     if payload.guild_id is None:
         return
     guild = bot.get_guild(payload.guild_id)
