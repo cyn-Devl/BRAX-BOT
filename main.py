@@ -291,15 +291,29 @@ async def on_guild_channel_create(channel):
     role = channel.guild.get_role(BLACKLIST_ROLES["Divine punishment"])
     if role is None:
         return
-    overwrite = channel.overwrites_for(role)
-    overwrite.send_messages = False
-    overwrite.send_messages_in_threads = False
-    overwrite.add_reactions = False
-    overwrite.create_public_threads = False
-    overwrite.create_private_threads = False
-    overwrite.use_application_commands = False
+
+    role_overwrite = channel.overwrites_for(role)
+    role_overwrite.send_messages = False
+    role_overwrite.send_messages_in_threads = False
+    role_overwrite.add_reactions = False
+    role_overwrite.create_public_threads = False
+    role_overwrite.create_private_threads = False
+    role_overwrite.use_application_commands = False
     try:
-        await channel.set_permissions(role, overwrite=overwrite, reason="BRAX Divine punishment channel restriction")
+        await channel.set_permissions(role, overwrite=role_overwrite, reason="BRAX Divine punishment channel restriction")
+        for member in channel.guild.members:
+            if has_blacklist(member, "Divine punishment"):
+                member_overwrite = channel.overwrites_for(member)
+                member_overwrite.send_messages = False
+                member_overwrite.send_messages_in_threads = False
+                member_overwrite.add_reactions = False
+                member_overwrite.create_public_threads = False
+                member_overwrite.create_private_threads = False
+                member_overwrite.use_application_commands = False
+                await channel.set_permissions(
+                    member, overwrite=member_overwrite,
+                    reason="BRAX Divine punishment: explicit member restriction",
+                )
     except discord.HTTPException as error:
         print(f"BRAX: Could not apply Divine punishment to new channel {channel}: {error}")
 
@@ -499,6 +513,46 @@ async def on_member_update(before, after):
 @bot.event
 async def on_message(message):
     if message.guild is None or (bot.user is not None and message.author.id == bot.user.id):
+        return
+
+    # Enforce Divine punishment at message level as a fallback to channel
+    # permissions. Delete messages written by punished members.
+    author = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
+    if author is not None and has_blacklist(author, "Divine punishment"):
+        try:
+            await message.delete()
+            print(f"BRAX: Deleted a message from Divine-punished member {author} in {message.channel}.")
+        except discord.Forbidden:
+            print("BRAX: Missing Manage Messages permission; could not delete a Divine-punished member's message.")
+        except discord.HTTPException as error:
+            print(f"BRAX: Failed to delete Divine-punished member message: {error}")
+        return
+
+    # Remove messages from anyone that ping a Divine-punished member,
+    # including direct mentions, role mentions, and @everyone/@here.
+    punished_members = [
+        member for member in message.guild.members
+        if has_blacklist(member, "Divine punishment")
+    ]
+    mentioned_ids = {member.id for member in message.mentions}
+    mentioned_role_ids = {role.id for role in message.role_mentions}
+    pinged = [
+        member for member in punished_members
+        if member.id in mentioned_ids
+        or message.mention_everyone
+        or any(role.id in mentioned_role_ids for role in member.roles)
+    ]
+    if pinged:
+        try:
+            await message.delete()
+            print(
+                "BRAX: Deleted a message that attempted to ping Divine-punished member(s): "
+                + ", ".join(str(member) for member in pinged)
+            )
+        except discord.Forbidden:
+            print("BRAX: Missing Manage Messages permission; could not delete a message pinging a Divine-punished member.")
+        except discord.HTTPException as error:
+            print(f"BRAX: Failed to delete message pinging Divine-punished member: {error}")
         return
 
     if message.author.bot:
@@ -753,21 +807,34 @@ async def apply_divine_punishment(member):
     except discord.HTTPException as error:
         print(f"BRAX: Could not fully apply Divine punishment roles: {error}")
 
-    # Deny typing, reactions, threads, and slash-command use throughout the server.
+    # Role overwrites can be overridden by another role's allow. Apply an
+    # explicit member deny as well, so ordinary role hierarchy/role allows
+    # cannot grant this member permission to speak or use app commands.
     for channel in member.guild.channels:
         if not isinstance(channel, (discord.TextChannel, discord.ForumChannel, discord.CategoryChannel, discord.VoiceChannel, discord.StageChannel)):
             continue
-        overwrite = channel.overwrites_for(role)
-        overwrite.send_messages = False
-        overwrite.send_messages_in_threads = False
-        overwrite.add_reactions = False
-        overwrite.create_public_threads = False
-        overwrite.create_private_threads = False
-        overwrite.use_application_commands = False
+        role_overwrite = channel.overwrites_for(role)
+        role_overwrite.send_messages = False
+        role_overwrite.send_messages_in_threads = False
+        role_overwrite.add_reactions = False
+        role_overwrite.create_public_threads = False
+        role_overwrite.create_private_threads = False
+        role_overwrite.use_application_commands = False
+        member_overwrite = channel.overwrites_for(member)
+        member_overwrite.send_messages = False
+        member_overwrite.send_messages_in_threads = False
+        member_overwrite.add_reactions = False
+        member_overwrite.create_public_threads = False
+        member_overwrite.create_private_threads = False
+        member_overwrite.use_application_commands = False
         try:
             await channel.set_permissions(
-                role, overwrite=overwrite,
-                reason="BRAX Divine punishment: server-wide communication restriction",
+                role, overwrite=role_overwrite,
+                reason="BRAX Divine punishment: server-wide role restriction",
+            )
+            await channel.set_permissions(
+                member, overwrite=member_overwrite,
+                reason="BRAX Divine punishment: explicit member restriction",
             )
         except discord.HTTPException as error:
             print(f"BRAX: Could not restrict Divine punishment in {channel}: {error}")
