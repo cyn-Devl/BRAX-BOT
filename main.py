@@ -67,6 +67,12 @@ STAFF_ROLE_NAMES = {
     "zinzicraftian admin", "senior moderator", "moderator",
     "trial moderator", "ingame admin", "ingame moderator",
 }
+DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS = {
+    781537035428429866,  # noobidbody
+    942862192867409941,  # eyeless
+    1521469840970350632, # Braxton
+    1511412885040009309, # kaydnn
+}
 HIGH_STAFF_ROLE_NAMES = {
     "developers", "senior admin", "admin", "trial admin",
     "zinzicraftian admin", "senior moderator",
@@ -376,22 +382,69 @@ async def on_member_update(before, after):
     )
     actor = entry.user if entry else None
 
-    # Blacklist roles can only be removed by the member who originally assigned them.
+    # Blacklist roles are protected. Divine punishment has a separate fixed allowlist.
     for role in removed:
         if role.id not in BLACKLIST_ROLES.values():
             continue
+
         key = blacklist_assignment_key(after.guild.id, after.id, role.id)
         assigned_by = blacklist_assignments.get(key)
         actor_id = getattr(actor, "id", None)
-        if assigned_by is None or actor_id != assigned_by:
+
+        if role.id == BLACKLIST_ROLES["Divine punishment"]:
+            allowed_to_remove = actor_id in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS
+        else:
+            allowed_to_remove = assigned_by is not None and actor_id == assigned_by
+
+        if not allowed_to_remove:
             try:
-                await after.add_roles(role, reason="BRAX: only the original blacklist issuer may remove this role")
-                print(f"BRAX: Restored protected blacklist role {role.name} on {after}.")
+                await after.add_roles(
+                    role,
+                    reason="BRAX: unauthorized attempt to remove a protected blacklist role",
+                )
+                print(
+                    f"BRAX: Blocked unauthorized removal attempt for {role.name} "
+                    f"from {after} by {actor or 'unknown actor'}."
+                )
             except discord.HTTPException as error:
                 print(f"BRAX: Could not restore protected blacklist role {role.name}: {error}")
+
+            attempt_embed = make_embed(
+                f"{EMOJIS['denied']} Blacklist Removal Attempt Blocked",
+                f"An unauthorized attempt was made to remove **{role.name}** from {after.mention}.",
+                discord.Color.red(),
+            )
+            add_member_field(attempt_embed, "Affected Member", after)
+            attempt_embed.add_field(
+                name="Attempted By",
+                value=f"{getattr(actor, 'mention', 'Unknown (audit log unavailable)')}\nID: {actor_id or 'Unknown'}",
+                inline=True,
+            )
+            attempt_embed.add_field(name="Blacklist Role", value=role.name, inline=True)
+            await send_log(attempt_embed)
+
+            if role.id == BLACKLIST_ROLES["Divine punishment"]:
+                warning = (
+                    "Even tho we pray for your survival your power won't help you "
+                    "in this predicament all you have is praying left dear god help "
+                    f"{after.mention} 🙏"
+                )
+            else:
+                warning = (
+                    f"OH no you don't buddy trying to remove your **{role.name}** "
+                    f"from yourself mr {after.mention}"
+                )
+            await send_user_warning(after.guild, after, warning)
         else:
             blacklist_assignments.pop(key, None)
             save_blacklist_assignments()
+
+    # Re-apply suggestion restrictions if an unauthorized removal was reversed.
+    if (
+        BLACKLIST_ROLES["Suggestion blacklist"] in [role.id for role in removed]
+        and has_blacklist(after, "Suggestion blacklist")
+    ):
+        await apply_suggestion_restriction(after)
 
     for role in added:
         special = is_staff_role(role)
