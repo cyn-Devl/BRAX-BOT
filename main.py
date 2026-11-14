@@ -65,6 +65,15 @@ STAFF_ROLE_NAMES = {
     "zinzicraftian admin", "senior moderator", "moderator",
     "trial moderator", "ingame admin", "ingame moderator",
 }
+HIGH_STAFF_ROLE_NAMES = {
+    "developers", "senior admin", "admin", "trial admin",
+    "zinzicraftian admin", "senior moderator",
+}
+HIGH_STAFF_ROLE_IDS = {
+    int(value.strip())
+    for value in os.getenv("HIGH_STAFF_ROLE_IDS", "").split(",")
+    if value.strip().isdigit()
+}
 role_blacklist_warnings = {}
 
 intents = discord.Intents.default()
@@ -72,7 +81,7 @@ intents.guilds = True
 intents.members = True
 intents.messages = True
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="b!", intents=intents, help_command=None)
 
 # In-memory only: message contents are not persisted across restarts.
 message_cache = OrderedDict()
@@ -83,6 +92,13 @@ recent_messages = {}
 def shorten(value, limit=1024):
     value = str(value or "")
     return value if len(value) <= limit else value[:limit - 3] + "..."
+
+
+def is_high_staff(member):
+    return any(
+        role.id in HIGH_STAFF_ROLE_IDS or role.name.casefold() in HIGH_STAFF_ROLE_NAMES
+        for role in member.roles
+    )
 
 
 def is_staff_role(role):
@@ -460,6 +476,9 @@ async def on_message(message):
     while len(message_cache) > MAX_MESSAGE_CACHE:
         message_cache.popitem(last=False)
 
+    # This custom on_message handler must pass messages to prefix commands.
+    await bot.process_commands(message)
+
 
 @bot.event
 async def on_message_delete(message):
@@ -714,6 +733,9 @@ class BlacklistSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction):
+        if not is_high_staff(interaction.user):
+            await interaction.response.send_message("Only higher staff can use BRAX blacklist controls.", ephemeral=True)
+            return
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("You need Manage Roles to use this.", ephemeral=True)
             return
@@ -748,17 +770,18 @@ class BlacklistView(discord.ui.View):
         self.add_item(BlacklistSelect(target))
 
 
-@bot.tree.command(name="blacklist", description="Give a member a selected blacklist role.")
-@app_commands.describe(user="The member who should receive a blacklist")
-@app_commands.default_permissions(manage_roles=True)
-async def blacklist_command(interaction: discord.Interaction, user: discord.Member):
-    if not interaction.user.guild_permissions.manage_roles:
-        await interaction.response.send_message("You need Manage Roles to use this.", ephemeral=True)
+@bot.command(name="blacklist")
+async def blacklist_command(ctx, user: discord.Member):
+    if not is_high_staff(ctx.author):
+        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
         return
-    await interaction.response.send_message(
+    if not ctx.author.guild_permissions.manage_roles:
+        await ctx.reply("You also need the **Manage Roles** permission.", mention_author=False)
+        return
+    await ctx.reply(
         f"Choose a blacklist to give to {user.mention}:",
         view=BlacklistView(user),
-        ephemeral=True,
+        mention_author=False,
     )
 
 
@@ -980,15 +1003,17 @@ class TicketControlsView(discord.ui.View):
         await close_ticket_channel(interaction)
 
 
-@bot.tree.command(name="ticketpanel", description="Post the BRAX ticket panel.")
-@app_commands.default_permissions(manage_guild=True)
-async def ticket_panel_command(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.manage_guild:
-        await interaction.response.send_message("You need Manage Server to post the ticket panel.", ephemeral=True)
+@bot.command(name="ticketpanel")
+async def ticket_panel_command(ctx):
+    if not is_high_staff(ctx.author):
+        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
         return
-    channel = interaction.guild.get_channel(TICKETS_CHANNEL_ID)
+    if not ctx.author.guild_permissions.manage_guild:
+        await ctx.reply("You also need the **Manage Server** permission.", mention_author=False)
+        return
+    channel = ctx.guild.get_channel(TICKETS_CHANNEL_ID)
     if not isinstance(channel, discord.TextChannel):
-        await interaction.response.send_message("The configured ticket panel channel wasn't found.", ephemeral=True)
+        await ctx.reply("The configured ticket panel channel wasn't found.", mention_author=False)
         return
     embed = discord.Embed(
         title="Open a ticket",
@@ -998,9 +1023,26 @@ async def ticket_panel_command(interaction: discord.Interaction):
     embed.set_footer(text="Braxton Lwk had this idea")
     try:
         await channel.send(embed=embed, view=TicketPanelView())
-        await interaction.response.send_message(f"Ticket panel posted in {channel.mention}.", ephemeral=True)
+        await ctx.reply(f"Ticket panel posted in {channel.mention}.", mention_author=False)
     except discord.Forbidden:
-        await interaction.response.send_message("I need View Channel, Send Messages, and Embed Links there.", ephemeral=True)
+        await ctx.reply("I need View Channel, Send Messages, and Embed Links there.", mention_author=False)
+
+
+@bot.command(name="help")
+async def brax_help_command(ctx):
+    if not is_high_staff(ctx.author):
+        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
+        return
+    embed = discord.Embed(
+        title="BRAX Commands",
+        description="Commands available to higher staff:",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    embed.add_field(name="b!ticketpanel", value="Posts the ticket panel in the configured tickets channel.", inline=False)
+    embed.add_field(name="b!blacklist @user", value="Opens the blacklist dropdown for the selected member.", inline=False)
+    embed.add_field(name="b!help", value="Shows this command list.", inline=False)
+    embed.set_footer(text="BRAX • Higher Staff Only")
+    await ctx.reply(embed=embed, mention_author=False)
 
 
 if not TOKEN:
@@ -1009,5 +1051,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: commands.Bot / slash-command support")
+print("BRAX BUILD: b! prefix commands / higher-staff restriction")
 bot.run(TOKEN)
