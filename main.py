@@ -285,6 +285,15 @@ async def on_ready():
             print(f"BRAX: Slash-command sync failed: {error}")
         bot._brax_synced = True
 
+    # Re-apply Divine punishment restrictions after every fresh startup so
+    # already-punished members receive the updated channel overwrites too.
+    if not getattr(bot, "_divine_reapplied", False):
+        for guild in bot.guilds:
+            for member in guild.members:
+                if has_blacklist(member, "Divine punishment"):
+                    await apply_divine_punishment(member)
+        bot._divine_reapplied = True
+
 
 @bot.event
 async def on_guild_channel_create(channel):
