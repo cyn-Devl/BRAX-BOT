@@ -1613,10 +1613,10 @@ HELP_PAGES = [
             "**Special authorization**\n"
             "The four people listed below are specifically allowed to assign or remove "
             "the Divine punishment role:\n"
-            "• noobidbody — \`781537035428429866\`\n"
-            "• eyeless — \`942862192867409941\`\n"
-            "• Braxton — \`1521469840970350632\`\n"
-            "• kaydnn — \`1511412885040009309\`\n\n"
+            "• noobidbody — `781537035428429866`\n"
+            "• eyeless — `942862192867409941`\n"
+            "• Braxton — `1521469840970350632`\n"
+            "• kaydnn — `1511412885040009309`\n\n"
             "Higher staff can use the regular blacklist menu. Divine punishment "
             "assignment/removal is limited to those four accounts."
         ),
@@ -1625,31 +1625,31 @@ HELP_PAGES = [
     {
         "title": "<:Tools:1571303064256909482> Server Tools",
         "description": (
-            "\`b!ticketpanel\` — Post the ticket panel.\n"
-            "\`b!blacklist @user\` — Open the blacklist menu.\n"
-            "\`b!help\` — Open this interactive help menu.\n"
-            "\`/help\` — Show help privately."
+            "`b!ticketpanel` — Post the ticket panel.\n"
+            "`b!blacklist @user` — Open the blacklist menu.\n"
+            "`b!help` — Open this interactive help menu.\n"
+            "`/help` — Show help privately."
         ),
         "footer": "BRAX • Server Tools",
     },
     {
         "title": "<:Moderation:1571302568070611045> Moderation",
         "description": (
-            "\`b!timeout @user 10m reason\` — Timeout a member. Aliases: \`b!mute\`, \`b!tempmute\`. "
+            "`b!timeout @user 10m reason` — Timeout a member. Aliases: `b!mute`, `b!tempmute`. "
             "Duration and reason are required; supports s, m, h, d, w (maximum 28 days).\n"
-            "\`b!untimeout @user [reason]\` — Remove a timeout. Aliases: \`b!unmute\`, \`b!removetimeout\`.\n"
-            "\`b!kick @user [reason]\` — Kick a member.\n"
-            "\`b!ban @user [reason]\` — Ban a member.\n"
-            "\`b!unban userID [reason]\` — Unban by user ID.\n"
-            "\`b!roleadd @user @role [reason]\` — Give a role. Alias: \`b!addrole\`.\n"
-            "\`b!roleremove @user @role [reason]\` — Remove a role. Alias: \`b!removerole\`."
+            "`b!untimeout @user [reason]` — Remove a timeout. Aliases: `b!unmute`, `b!removetimeout`.\n"
+            "`b!kick @user [reason]` — Kick a member.\n"
+            "`b!ban @user [reason]` — Ban a member.\n"
+            "`b!unban userID [reason]` — Unban by user ID.\n"
+            "`b!roleadd @user @role [reason]` — Give a role. Alias: `b!addrole`.\n"
+            "`b!roleremove @user @role [reason]` — Remove a role. Alias: `b!removerole`."
         ),
         "footer": "BRAX • Moderation",
     },
     {
         "title": "<:Logging:1571302754272542852> Logging",
         "description": (
-            "\`b!mlog [#channel]\` — Set the moderation log channel. "
+            "`b!mlog [#channel]` — Set the moderation log channel. "
             "If no channel is supplied, BRAX uses the channel where you run the command.\n\n"
             "Moderation actions are recorded with the affected member, moderator, "
             "reason, and timeout duration when applicable."
