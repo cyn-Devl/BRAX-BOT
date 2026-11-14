@@ -383,12 +383,15 @@ async def on_member_update(before, after):
         key = blacklist_assignment_key(after.guild.id, after.id, role.id)
         assigned_by = blacklist_assignments.get(key)
         actor_id = getattr(actor, "id", None)
-        if assigned_by is not None and actor_id != assigned_by:
+        if assigned_by is None or actor_id != assigned_by:
             try:
                 await after.add_roles(role, reason="BRAX: only the original blacklist issuer may remove this role")
                 print(f"BRAX: Restored protected blacklist role {role.name} on {after}.")
             except discord.HTTPException as error:
                 print(f"BRAX: Could not restore protected blacklist role {role.name}: {error}")
+        else:
+            blacklist_assignments.pop(key, None)
+            save_blacklist_assignments()
 
     for role in added:
         special = is_staff_role(role)
@@ -437,7 +440,7 @@ async def on_member_update(before, after):
 
 @bot.event
 async def on_message(message):
-    if message.guild is None:
+    if message.guild is None or (bot.user is not None and message.author.id == bot.user.id):
         return
 
     # Any ping/mention directed at a Divine-punished member triggers a public notice,
