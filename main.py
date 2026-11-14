@@ -235,6 +235,15 @@ async def on_ready():
     print(f"Logging channel ID: {LOG_CHANNEL_ID}")
     print(f"Connected guilds: {len(bot.guilds)}")
     print("===================================")
+    if not getattr(bot, "_brax_synced", False):
+        bot.add_view(TicketPanelView())
+        bot.add_view(TicketControlsView())
+        try:
+            synced = await bot.tree.sync()
+            print(f"BRAX: Synced {len(synced)} slash commands.")
+        except discord.HTTPException as error:
+            print(f"BRAX: Slash-command sync failed: {error}")
+        bot._brax_synced = True
 
 
 @bot.event
@@ -296,6 +305,15 @@ async def on_member_update(before, after):
         role for role in before.roles
         if role.id not in after_ids and role != after.guild.default_role
     ]
+    await handle_blacklisted_role_changes(before, after, added)
+
+    had_suggestion = any(
+        role.id == BLACKLIST_ROLES["Suggestion blacklist"] for role in before.roles
+    )
+    has_suggestion_now = has_blacklist(after, "Suggestion blacklist")
+    if had_suggestion != has_suggestion_now:
+        await apply_suggestion_restriction(after)
+
     if not added and not removed:
         return
 
@@ -659,19 +677,8 @@ async def handle_blacklisted_role_changes(before, after, added_roles):
             )
 
 
-@bot.listen("on_member_update")
-async def blacklist_member_update(before, after):
-    before_ids = {role.id for role in before.roles}
-    added = [role for role in after.roles if role.id not in before_ids]
-    await handle_blacklisted_role_changes(before, after, added)
+@bot.event
 
-    had_suggestion = any(r.id == BLACKLIST_ROLES["Suggestion blacklist"] for r in before.roles)
-    has_suggestion = has_blacklist(after, "Suggestion blacklist")
-    if had_suggestion != has_suggestion:
-        await apply_suggestion_restriction(after)
-
-
-@bot.listen("on_raw_reaction_add")
 async def block_blacklisted_suggestion_reactions(payload):
     if payload.guild_id is None:
         return
@@ -993,19 +1000,6 @@ async def ticket_panel_command(interaction: discord.Interaction):
         await interaction.response.send_message(f"Ticket panel posted in {channel.mention}.", ephemeral=True)
     except discord.Forbidden:
         await interaction.response.send_message("I need View Channel, Send Messages, and Embed Links there.", ephemeral=True)
-
-
-@bot.listen("on_ready")
-async def register_brax_views_and_commands():
-    if not getattr(bot, "_brax_synced", False):
-        bot.add_view(TicketPanelView())
-        bot.add_view(TicketControlsView())
-        try:
-            synced = await bot.tree.sync()
-            print(f"BRAX: Synced {len(synced)} slash commands.")
-        except discord.HTTPException as error:
-            print(f"BRAX: Slash-command sync failed: {error}")
-        bot._brax_synced = True
 
 
 if not TOKEN:
