@@ -1054,6 +1054,27 @@ async def brax_help_command(ctx):
     await ctx.reply(embed=embed, mention_author=False)
 
 
+@bot.tree.command(name="help", description="Show BRAX commands for higher staff.")
+async def brax_slash_help_command(interaction: discord.Interaction):
+    if not is_high_staff(interaction.user):
+        await interaction.response.send_message(
+            "You don't have permission to use BRAX commands. This is limited to higher staff.",
+            ephemeral=True,
+        )
+        return
+    embed = discord.Embed(
+        title="BRAX Commands",
+        description="Commands available to higher staff:",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    embed.add_field(name="b!ticketpanel", value="Posts the ticket panel in the configured tickets channel.", inline=False)
+    embed.add_field(name="b!blacklist @user", value="Opens the blacklist dropdown for the selected member.", inline=False)
+    embed.add_field(name="b!help", value="Shows this command list in the server.", inline=False)
+    embed.add_field(name="/help", value="Shows this command list as a private slash-command response.", inline=False)
+    embed.set_footer(text="BRAX • Higher Staff Only")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 if not TOKEN:
     raise RuntimeError(
         "BOT_TOKEN is missing. Check that Wispbyte's .env file is in the "
