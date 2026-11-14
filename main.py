@@ -1348,10 +1348,10 @@ class TicketControlsView(discord.ui.View):
 
 def parse_timeout_duration(value):
     """Parse durations such as 30s, 10m, 2h, 3d, 1w, or 1d2h."""
-    matches = list(re.finditer(r"(\\d+)\\s*(w|d|h|m|s)", value.casefold()))
+    matches = list(re.finditer(r"(\d+)\s*(w|d|h|m|s)", value.casefold()))
     if not matches:
         raise ValueError("Use a duration like 30s, 10m, 2h, 3d, 1w, or 1d2h.")
-    compact = re.sub(r"\\s+", "", value.casefold())
+    compact = re.sub(r"\s+", "", value.casefold())
     if "".join(match.group(0).replace(" ", "") for match in matches) != compact:
         raise ValueError("That duration format isn't valid. Example: 10m, 2h, or 1d2h.")
     seconds = 0
@@ -1387,8 +1387,8 @@ async def send_moderation_result(ctx, action, target, reason, duration=None, col
         color=color or discord.Color.orange(),
         timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name="Member", value=f"{target}\\nID: {target.id}", inline=True)
-    embed.add_field(name="Moderator", value=f"{ctx.author}\\nID: {ctx.author.id}", inline=True)
+    embed.add_field(name="Member", value=f"{target}\nID: {target.id}", inline=True)
+    embed.add_field(name="Moderator", value=f"{ctx.author}\nID: {ctx.author.id}", inline=True)
     if duration:
         embed.add_field(name="Duration", value=duration, inline=True)
     embed.add_field(name="Reason", value=shorten(reason or "No reason provided", 1024), inline=False)
@@ -1416,7 +1416,7 @@ async def moderation_log_command(ctx, channel: discord.TextChannel = None):
     )
 
 
-@bot.command(name="timeout")
+@bot.command(name="timeout", aliases=["mute", "tempmute"])
 async def timeout_command(ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided"):
     if not await moderation_gate(ctx, "moderate_members"):
         return
@@ -1432,7 +1432,7 @@ async def timeout_command(ctx, member: discord.Member, duration: str, *, reason:
         await ctx.reply(f"{EMOJIS['denied']} {error}", mention_author=False)
         return
     try:
-        await member.timeout(parsed_duration, reason=f"{ctx.author}: {reason}")
+        await member.timeout(discord.utils.utcnow() + parsed_duration, reason=f"{ctx.author}: {reason}")
     except discord.Forbidden:
         await ctx.reply(f"{EMOJIS['denied']} I can't timeout that member. Check my Moderate Members permission and role position.", mention_author=False)
         return
@@ -1527,7 +1527,7 @@ async def unban_command(ctx, user_id: int, *, reason: str = "Ban removed"):
 
 
 @bot.command(name="roleadd", aliases=["addrole"])
-async def role_add_command(ctx, member: discord.Member, role: discord.Role):
+async def role_add_command(ctx, member: discord.Member, role: discord.Role, *, reason: str = "Role added by moderator"):
     if not await moderation_gate(ctx, "manage_roles"):
         return
     if role.is_default() or role.managed or role >= ctx.guild.me.top_role:
@@ -1544,13 +1544,12 @@ async def role_add_command(ctx, member: discord.Member, role: discord.Role):
     except discord.HTTPException as error:
         await ctx.reply(f"{EMOJIS['denied']} Role add failed: {error}", mention_author=False)
         return
-    reason = "Role added by moderator"
-    await ctx.reply(f"{EMOJIS['confirmed']} Added {role.mention} to {member.mention}.", mention_author=False)
+    await ctx.reply(f"{EMOJIS['confirmed']} Added {role.mention} to {member.mention}. Reason: {reason}", mention_author=False)
     await send_moderation_result(ctx, "Role Added", member, reason)
     
 
 @bot.command(name="roleremove", aliases=["removerole"])
-async def role_remove_command(ctx, member: discord.Member, role: discord.Role):
+async def role_remove_command(ctx, member: discord.Member, role: discord.Role, *, reason: str = "Role removed by moderator"):
     if not await moderation_gate(ctx, "manage_roles"):
         return
     if role.is_default() or role.managed or role >= ctx.guild.me.top_role:
@@ -1570,8 +1569,7 @@ async def role_remove_command(ctx, member: discord.Member, role: discord.Role):
     except discord.HTTPException as error:
         await ctx.reply(f"{EMOJIS['denied']} Role removal failed: {error}", mention_author=False)
         return
-    reason = "Role removed by moderator"
-    await ctx.reply(f"{EMOJIS['confirmed']} Removed {role.mention} from {member.mention}.", mention_author=False)
+    await ctx.reply(f"{EMOJIS['confirmed']} Removed {role.mention} from {member.mention}. Reason: {reason}", mention_author=False)
     await send_moderation_result(ctx, "Role Removed", member, reason)
 
 
@@ -1616,8 +1614,8 @@ async def brax_help_command(ctx):
     embed.add_field(
         name="🛡️ Moderation",
         value=(
-            "`b!timeout @user 10m reason` — Timeout a member. Durations: s, m, h, d, w (maximum 28 days).\n"
-            "`b!untimeout @user [reason]` — Remove a timeout.\n"
+            "`b!timeout @user 10m reason` — Timeout a member (aliases: b!mute, b!tempmute). Durations: s, m, h, d, w (maximum 28 days).\n"
+            "`b!untimeout @user [reason]` — Remove a timeout (aliases: b!unmute, b!removetimeout).\n"
             "`b!kick @user [reason]` — Kick a member.\n"
             "`b!ban @user [reason]` — Ban a member.\n"
             "`b!unban userID [reason]` — Unban by user ID.\n"
