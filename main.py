@@ -648,8 +648,8 @@ async def handle_blacklisted_role_changes(before, after, added_roles):
     if role_blacklisted:
         now = time.monotonic()
         recent = role_blacklist_warnings.setdefault(after.id, deque())
-        while recent and now - recent[0] >= 86400:
-            recent.popleft()
+        if len(recent) >= 2 and now - recent[-1] >= 86400:
+            recent.clear()
         if len(recent) < 2:
             recent.append(now)
             await send_user_warning(
@@ -673,7 +673,7 @@ async def blacklist_member_update(before, after):
 
 @bot.listen("on_raw_reaction_add")
 async def block_blacklisted_suggestion_reactions(payload):
-    if payload.guild_id is None or payload.channel_id != SUGGESTION_CHANNEL_ID:
+    if payload.guild_id is None:
         return
     guild = bot.get_guild(payload.guild_id)
     member = guild.get_member(payload.user_id) if guild else None
@@ -681,6 +681,9 @@ async def block_blacklisted_suggestion_reactions(payload):
         return
     try:
         channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
+        parent_id = getattr(channel, "parent_id", None)
+        if payload.channel_id != SUGGESTION_CHANNEL_ID and parent_id != SUGGESTION_CHANNEL_ID:
+            return
         message = await channel.fetch_message(payload.message_id)
         await message.remove_reaction(payload.emoji, member)
     except discord.HTTPException:
