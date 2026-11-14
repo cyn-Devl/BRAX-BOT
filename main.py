@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import time
 from collections import OrderedDict
@@ -47,6 +48,7 @@ BLACKLIST_ROLES = {
     "Image blacklist": 1571274714414973009,
     "Role blacklist": 1570618973731688468,
     "Staff blacklist": 1570148574480830626,
+    "Divine punishment": 1571292901659644024,
 }
 GENERAL_CHANNEL_ID = 1561145710361976882
 SUGGESTION_CHANNEL_ID = 1517259302459543714
@@ -75,6 +77,21 @@ HIGH_STAFF_ROLE_IDS = {
     if value.strip().isdigit()
 }
 role_blacklist_warnings = {}
+BLACKLIST_ASSIGNMENTS_FILE = "blacklist_assignments.json"
+try:
+    with open(BLACKLIST_ASSIGNMENTS_FILE, "r", encoding="utf-8") as file:
+        blacklist_assignments = json.load(file)
+except (OSError, json.JSONDecodeError):
+    blacklist_assignments = {}
+
+
+def save_blacklist_assignments():
+    with open(BLACKLIST_ASSIGNMENTS_FILE, "w", encoding="utf-8") as file:
+        json.dump(blacklist_assignments, file)
+
+
+def blacklist_assignment_key(guild_id, user_id, role_id):
+    return f"{guild_id}:{user_id}:{role_id}"
 
 intents = discord.Intents.default()
 intents.guilds = True
@@ -264,6 +281,24 @@ async def on_ready():
 
 
 @bot.event
+async def on_guild_channel_create(channel):
+    role = channel.guild.get_role(BLACKLIST_ROLES["Divine punishment"])
+    if role is None:
+        return
+    overwrite = channel.overwrites_for(role)
+    overwrite.send_messages = False
+    overwrite.send_messages_in_threads = False
+    overwrite.add_reactions = False
+    overwrite.create_public_threads = False
+    overwrite.create_private_threads = False
+    overwrite.use_application_commands = False
+    try:
+        await channel.set_permissions(role, overwrite=overwrite, reason="BRAX Divine punishment channel restriction")
+    except discord.HTTPException as error:
+        print(f"BRAX: Could not apply Divine punishment to new channel {channel}: {error}")
+
+
+@bot.event
 async def on_member_join(member):
     embed = make_embed(
         f"{EMOJIS['confirmed']} Member Joined",
@@ -341,6 +376,20 @@ async def on_member_update(before, after):
     )
     actor = entry.user if entry else None
 
+    # Blacklist roles can only be removed by the member who originally assigned them.
+    for role in removed:
+        if role.id not in BLACKLIST_ROLES.values():
+            continue
+        key = blacklist_assignment_key(after.guild.id, after.id, role.id)
+        assigned_by = blacklist_assignments.get(key)
+        actor_id = getattr(actor, "id", None)
+        if assigned_by is not None and actor_id != assigned_by:
+            try:
+                await after.add_roles(role, reason="BRAX: only the original blacklist issuer may remove this role")
+                print(f"BRAX: Restored protected blacklist role {role.name} on {after}.")
+            except discord.HTTPException as error:
+                print(f"BRAX: Could not restore protected blacklist role {role.name}: {error}")
+
     for role in added:
         special = is_staff_role(role)
         title = (
@@ -388,7 +437,29 @@ async def on_member_update(before, after):
 
 @bot.event
 async def on_message(message):
-    if message.guild is None or message.author.bot:
+    if message.guild is None:
+        return
+
+    # Any ping/mention directed at a Divine-punished member triggers a public notice,
+    # including bot-generated level-up or command-response messages.
+    punished_members = [
+        member for member in message.mentions
+        if has_blacklist(member, "Divine punishment")
+    ]
+    if message.mention_everyone or message.role_mentions:
+        punished_members.extend(
+            member for member in message.guild.members
+            if has_blacklist(member, "Divine punishment")
+            and member.id not in {item.id for item in punished_members}
+            and any(role.id in {r.id for r in message.role_mentions} for role in member.roles)
+        )
+    for punished in punished_members:
+        await send_user_warning(
+            message.guild, punished,
+            "you have been noticed while under Divine punishment 🙏",
+        )
+
+    if message.author.bot:
         return
 
     # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
@@ -619,6 +690,44 @@ async def send_user_warning(guild, member, text):
         print(f"BRAX: Could not send blacklist warning: {error}")
 
 
+async def apply_divine_punishment(member):
+    """Silence a Divine-punished member in existing channels and strip their other roles."""
+    role = member.guild.get_role(BLACKLIST_ROLES["Divine punishment"])
+    if role is None:
+        print("BRAX: Divine punishment role was not found.")
+        return
+    try:
+        other_roles = [
+            existing for existing in member.roles
+            if existing != member.guild.default_role and existing.id != role.id
+        ]
+        if other_roles:
+            await member.remove_roles(*other_roles, reason="BRAX Divine punishment: remove other roles")
+        if role not in member.roles:
+            await member.add_roles(role, reason="BRAX Divine punishment")
+    except discord.HTTPException as error:
+        print(f"BRAX: Could not fully apply Divine punishment roles: {error}")
+
+    # Deny typing, reactions, threads, and slash-command use throughout the server.
+    for channel in member.guild.channels:
+        if not isinstance(channel, (discord.TextChannel, discord.ForumChannel, discord.CategoryChannel, discord.VoiceChannel, discord.StageChannel)):
+            continue
+        overwrite = channel.overwrites_for(role)
+        overwrite.send_messages = False
+        overwrite.send_messages_in_threads = False
+        overwrite.add_reactions = False
+        overwrite.create_public_threads = False
+        overwrite.create_private_threads = False
+        overwrite.use_application_commands = False
+        try:
+            await channel.set_permissions(
+                role, overwrite=overwrite,
+                reason="BRAX Divine punishment: server-wide communication restriction",
+            )
+        except discord.HTTPException as error:
+            print(f"BRAX: Could not restrict Divine punishment in {channel}: {error}")
+
+
 async def apply_suggestion_restriction(member):
     channel = member.guild.get_channel(SUGGESTION_CHANNEL_ID)
     if channel is None:
@@ -657,7 +766,14 @@ async def handle_blacklisted_role_changes(before, after, added_roles):
     role_blacklisted = has_blacklist(after, "Role blacklist")
     staff_blacklisted = has_blacklist(after, "Staff blacklist")
     denied = []
-    if role_blacklisted:
+    divine_blacklisted = has_blacklist(after, "Divine punishment")
+    if divine_blacklisted:
+        denied.extend(
+            role for role in added_roles
+            if role.id != BLACKLIST_ROLES["Divine punishment"]
+            and role != after.guild.default_role
+        )
+    elif role_blacklisted:
         denied.extend(
             role for role in added_roles
             if role.id not in BLACKLIST_ROLES.values()
@@ -756,8 +872,19 @@ class BlacklistSelect(discord.ui.Select):
         except discord.HTTPException as error:
             await interaction.response.send_message(f"Couldn't assign the role: {error}", ephemeral=True)
             return
+        key = blacklist_assignment_key(guild.id, self.target.id, role_id)
+        blacklist_assignments[key] = interaction.user.id
+        save_blacklist_assignments()
         if role_id == BLACKLIST_ROLES["Suggestion blacklist"]:
             await apply_suggestion_restriction(self.target)
+        if role_id == BLACKLIST_ROLES["Divine punishment"]:
+            await apply_divine_punishment(self.target)
+            general = guild.get_channel(GENERAL_CHANNEL_ID)
+            if general:
+                await general.send(
+                    f"Pray for {self.target.mention} as has gotten divine punishment 🙏",
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+                )
         await interaction.response.send_message(
             f"{interaction.user.mention} gave {self.target.mention} **{role.name}**.",
             allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
