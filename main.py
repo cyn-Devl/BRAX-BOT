@@ -1376,5 +1376,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: b! prefix commands / higher-staff restriction")
+print("BRAX BUILD: interaction-timeout-fix + deletion-permission-diagnostics")
 bot.run(TOKEN)
