@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import re
 import time
 from collections import OrderedDict
 from datetime import timedelta
@@ -84,6 +85,13 @@ HIGH_STAFF_ROLE_IDS = {
 }
 role_blacklist_warnings = {}
 BLACKLIST_ASSIGNMENTS_FILE = "blacklist_assignments.json"
+MOD_LOG_CONFIG_FILE = "mod_log_config.json"
+try:
+    with open(MOD_LOG_CONFIG_FILE, "r", encoding="utf-8") as file:
+        mod_log_channels = json.load(file)
+except (OSError, json.JSONDecodeError):
+    mod_log_channels = {}
+
 try:
     with open(BLACKLIST_ASSIGNMENTS_FILE, "r", encoding="utf-8") as file:
         blacklist_assignments = json.load(file)
@@ -94,6 +102,11 @@ except (OSError, json.JSONDecodeError):
 def save_blacklist_assignments():
     with open(BLACKLIST_ASSIGNMENTS_FILE, "w", encoding="utf-8") as file:
         json.dump(blacklist_assignments, file)
+
+
+def save_mod_log_channels():
+    with open(MOD_LOG_CONFIG_FILE, "w", encoding="utf-8") as file:
+        json.dump(mod_log_channels, file)
 
 
 def blacklist_assignment_key(guild_id, user_id, role_id):
@@ -161,6 +174,29 @@ def make_embed(title, description, color):
     )
     embed.set_footer(text="BRAX • Server Logging")
     return embed
+
+
+async def send_mod_log(guild, embed):
+    channel_id = mod_log_channels.get(str(guild.id))
+    if not channel_id:
+        print(f"BRAX: No moderation log channel configured for {guild.name}. Use b!mlog in the desired channel.")
+        return False
+    channel = guild.get_channel(int(channel_id))
+    if channel is None:
+        try:
+            channel = await guild.fetch_channel(int(channel_id))
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as error:
+            print(f"BRAX: Could not access moderation log channel: {error}")
+            return False
+    if not isinstance(channel, discord.TextChannel):
+        print("BRAX: Configured moderation log channel is not a text channel.")
+        return False
+    try:
+        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        return True
+    except discord.HTTPException as error:
+        print(f"BRAX: Failed to send moderation log: {error}")
+        return False
 
 
 async def send_log(embed):
@@ -1307,6 +1343,238 @@ class TicketControlsView(discord.ui.View):
         await close_ticket_channel(interaction)
 
 
+
+# ---------------- MODERATION COMMANDS ----------------
+
+def parse_timeout_duration(value):
+    """Parse durations such as 30s, 10m, 2h, 3d, 1w, or 1d2h."""
+    matches = list(re.finditer(r"(\\d+)\\s*(w|d|h|m|s)", value.casefold()))
+    if not matches:
+        raise ValueError("Use a duration like 30s, 10m, 2h, 3d, 1w, or 1d2h.")
+    compact = re.sub(r"\\s+", "", value.casefold())
+    if "".join(match.group(0).replace(" ", "") for match in matches) != compact:
+        raise ValueError("That duration format isn't valid. Example: 10m, 2h, or 1d2h.")
+    seconds = 0
+    units = {"w": 604800, "d": 86400, "h": 3600, "m": 60, "s": 1}
+    for match in matches:
+        seconds += int(match.group(1)) * units[match.group(2)]
+    if seconds <= 0:
+        raise ValueError("The timeout duration must be greater than zero.")
+    if seconds > 28 * 86400:
+        raise ValueError("Discord timeouts cannot be longer than 28 days.")
+    return timedelta(seconds=seconds)
+
+
+async def moderation_gate(ctx, permission_name):
+    if not is_high_staff(ctx.author):
+        await ctx.reply(
+            f"{EMOJIS['denied']} Only higher staff can use BRAX moderation commands.",
+            mention_author=False,
+        )
+        return False
+    if not getattr(ctx.author.guild_permissions, permission_name, False):
+        await ctx.reply(
+            f"{EMOJIS['denied']} You need the **{permission_name.replace('_', ' ').title()}** permission.",
+            mention_author=False,
+        )
+        return False
+    return True
+
+
+async def send_moderation_result(ctx, action, target, reason, duration=None, color=None):
+    embed = discord.Embed(
+        title=f"{EMOJIS['confirmed']} {action}",
+        color=color or discord.Color.orange(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Member", value=f"{target}\\nID: {target.id}", inline=True)
+    embed.add_field(name="Moderator", value=f"{ctx.author}\\nID: {ctx.author.id}", inline=True)
+    if duration:
+        embed.add_field(name="Duration", value=duration, inline=True)
+    embed.add_field(name="Reason", value=shorten(reason or "No reason provided", 1024), inline=False)
+    embed.set_footer(text="BRAX • Moderation")
+    await send_mod_log(ctx.guild, embed)
+
+
+@bot.command(name="mlog")
+async def moderation_log_command(ctx, channel: discord.TextChannel = None):
+    if not await moderation_gate(ctx, "manage_guild"):
+        return
+    channel = channel or ctx.channel
+    permissions = channel.permissions_for(ctx.guild.me)
+    if not permissions.view_channel or not permissions.send_messages or not permissions.embed_links:
+        await ctx.reply(
+            f"{EMOJIS['denied']} I need View Channel, Send Messages, and Embed Links in {channel.mention}.",
+            mention_author=False,
+        )
+        return
+    mod_log_channels[str(ctx.guild.id)] = channel.id
+    save_mod_log_channels()
+    await ctx.reply(
+        f"{EMOJIS['confirmed']} Moderation logs will now be sent to {channel.mention}.",
+        mention_author=False,
+    )
+
+
+@bot.command(name="timeout")
+async def timeout_command(ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided"):
+    if not await moderation_gate(ctx, "moderate_members"):
+        return
+    if member.id == ctx.author.id or member.bot:
+        await ctx.reply(f"{EMOJIS['denied']} You can't timeout yourself or a bot.", mention_author=False)
+        return
+    if ctx.author.id != ctx.guild.owner_id and member.top_role >= ctx.author.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} You can't timeout someone with an equal or higher role.", mention_author=False)
+        return
+    try:
+        parsed_duration = parse_timeout_duration(duration)
+    except ValueError as error:
+        await ctx.reply(f"{EMOJIS['denied']} {error}", mention_author=False)
+        return
+    try:
+        await member.timeout(parsed_duration, reason=f"{ctx.author}: {reason}")
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I can't timeout that member. Check my Moderate Members permission and role position.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Timeout failed: {error}", mention_author=False)
+        return
+    await ctx.reply(f"{EMOJIS['confirmed']} {member.mention} was timed out for **{duration}**. Reason: {reason}", mention_author=False)
+    await send_moderation_result(ctx, "Member Timed Out", member, reason, duration)
+
+
+@bot.command(name="untimeout", aliases=["unmute", "removetimeout"])
+async def untimeout_command(ctx, member: discord.Member, *, reason: str = "Timeout removed"):
+    if not await moderation_gate(ctx, "moderate_members"):
+        return
+    if ctx.author.id != ctx.guild.owner_id and member.top_role >= ctx.author.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} You can't remove a timeout from someone with an equal or higher role.", mention_author=False)
+        return
+    try:
+        await member.timeout(None, reason=f"{ctx.author}: {reason}")
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I can't remove that timeout. Check my Moderate Members permission and role position.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Couldn't remove timeout: {error}", mention_author=False)
+        return
+    await ctx.reply(f"{EMOJIS['confirmed']} Removed the timeout from {member.mention}. Reason: {reason}", mention_author=False)
+    await send_moderation_result(ctx, "Timeout Removed", member, reason)
+
+
+@bot.command(name="kick")
+async def kick_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if not await moderation_gate(ctx, "kick_members"):
+        return
+    if member.id == ctx.author.id or member.bot:
+        await ctx.reply(f"{EMOJIS['denied']} You can't kick yourself or a bot.", mention_author=False)
+        return
+    if ctx.author.id != ctx.guild.owner_id and member.top_role >= ctx.author.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} You can't kick someone with an equal or higher role.", mention_author=False)
+        return
+    try:
+        await member.kick(reason=f"{ctx.author}: {reason}")
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I can't kick that member. Check my Kick Members permission and role position.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Kick failed: {error}", mention_author=False)
+        return
+    await ctx.reply(f"{EMOJIS['confirmed']} Kicked **{member}**. Reason: {reason}", mention_author=False)
+    await send_moderation_result(ctx, "Member Kicked", member, reason)
+
+
+@bot.command(name="ban")
+async def ban_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if not await moderation_gate(ctx, "ban_members"):
+        return
+    if member.id == ctx.author.id or member.bot:
+        await ctx.reply(f"{EMOJIS['denied']} You can't ban yourself or a bot.", mention_author=False)
+        return
+    if ctx.author.id != ctx.guild.owner_id and member.top_role >= ctx.author.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} You can't ban someone with an equal or higher role.", mention_author=False)
+        return
+    try:
+        await ctx.guild.ban(member, reason=f"{ctx.author}: {reason}", delete_message_seconds=0)
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I can't ban that member. Check my Ban Members permission and role position.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Ban failed: {error}", mention_author=False)
+        return
+    await ctx.reply(f"{EMOJIS['confirmed']} Banned **{member}**. Reason: {reason}", mention_author=False)
+    await send_moderation_result(ctx, "Member Banned", member, reason)
+
+
+@bot.command(name="unban")
+async def unban_command(ctx, user_id: int, *, reason: str = "Ban removed"):
+    if not await moderation_gate(ctx, "ban_members"):
+        return
+    try:
+        user = await bot.fetch_user(user_id)
+        await ctx.guild.unban(user, reason=f"{ctx.author}: {reason}")
+    except discord.NotFound:
+        await ctx.reply(f"{EMOJIS['denied']} That user isn't banned (or the ID is invalid).", mention_author=False)
+        return
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I need Ban Members permission to unban users.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Unban failed: {error}", mention_author=False)
+        return
+    await ctx.reply(f"{EMOJIS['confirmed']} Unbanned **{user}**. Reason: {reason}", mention_author=False)
+    await send_moderation_result(ctx, "Member Unbanned", user, reason)
+
+
+@bot.command(name="roleadd", aliases=["addrole"])
+async def role_add_command(ctx, member: discord.Member, role: discord.Role):
+    if not await moderation_gate(ctx, "manage_roles"):
+        return
+    if role.is_default() or role.managed or role >= ctx.guild.me.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} I can't assign that role. Check whether it's managed or above my highest role.", mention_author=False)
+        return
+    if ctx.author.id != ctx.guild.owner_id and role >= ctx.author.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} You can't assign a role equal to or above your highest role.", mention_author=False)
+        return
+    try:
+        await member.add_roles(role, reason=f"Role added by {ctx.author}")
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I can't assign that role. Check Manage Roles and role hierarchy.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Role add failed: {error}", mention_author=False)
+        return
+    reason = "Role added by moderator"
+    await ctx.reply(f"{EMOJIS['confirmed']} Added {role.mention} to {member.mention}.", mention_author=False)
+    await send_moderation_result(ctx, "Role Added", member, reason)
+    
+
+@bot.command(name="roleremove", aliases=["removerole"])
+async def role_remove_command(ctx, member: discord.Member, role: discord.Role):
+    if not await moderation_gate(ctx, "manage_roles"):
+        return
+    if role.is_default() or role.managed or role >= ctx.guild.me.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} I can't remove that role. Check whether it's managed or above my highest role.", mention_author=False)
+        return
+    if ctx.author.id != ctx.guild.owner_id and role >= ctx.author.top_role:
+        await ctx.reply(f"{EMOJIS['denied']} You can't remove a role equal to or above your highest role.", mention_author=False)
+        return
+    if role not in member.roles:
+        await ctx.reply(f"{EMOJIS['denied']} {member.mention} doesn't have {role.mention}.", mention_author=False)
+        return
+    try:
+        await member.remove_roles(role, reason=f"Role removed by {ctx.author}")
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I can't remove that role. Check Manage Roles and role hierarchy.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Role removal failed: {error}", mention_author=False)
+        return
+    reason = "Role removed by moderator"
+    await ctx.reply(f"{EMOJIS['confirmed']} Removed {role.mention} from {member.mention}.", mention_author=False)
+    await send_moderation_result(ctx, "Role Removed", member, reason)
+
+
 @bot.command(name="ticketpanel")
 async def ticket_panel_command(ctx):
     if not is_high_staff(ctx.author):
@@ -1335,17 +1603,45 @@ async def ticket_panel_command(ctx):
 @bot.command(name="help")
 async def brax_help_command(ctx):
     if not is_high_staff(ctx.author):
-        await ctx.reply("You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
+        await ctx.reply(f"{EMOJIS['denied']} You don't have permission to use BRAX commands. This is limited to higher staff.", mention_author=False)
         return
     embed = discord.Embed(
-        title="BRAX Commands",
-        description="Commands available to higher staff:",
+        title=f"{EMOJIS['link']} BRAX • Command Help",
+        description=(
+            "A server moderation and management bot.\n"
+            "Use the commands below with the **b!** prefix. Replace the examples with real members, roles, and reasons."
+        ),
         color=discord.Color.from_rgb(58, 48, 35),
     )
-    embed.add_field(name="b!ticketpanel", value="Posts the ticket panel in the configured tickets channel.", inline=False)
-    embed.add_field(name="b!blacklist @user", value="Opens the blacklist dropdown for the selected member.", inline=False)
-    embed.add_field(name="b!help", value="Shows this command list.", inline=False)
-    embed.set_footer(text="BRAX • Higher Staff Only")
+    embed.add_field(
+        name="🛡️ Moderation",
+        value=(
+            "`b!timeout @user 10m reason` — Timeout a member. Durations: s, m, h, d, w (maximum 28 days).\n"
+            "`b!untimeout @user [reason]` — Remove a timeout.\n"
+            "`b!kick @user [reason]` — Kick a member.\n"
+            "`b!ban @user [reason]` — Ban a member.\n"
+            "`b!unban userID [reason]` — Unban by user ID.\n"
+            "`b!roleadd @user @role` — Give a role.\n"
+            "`b!roleremove @user @role` — Remove a role."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="📋 Logging",
+        value="`b!mlog [#channel]` — Set the moderation log channel. If omitted, uses the channel where you run the command.",
+        inline=False,
+    )
+    embed.add_field(
+        name="⚙️ Server Tools",
+        value=(
+            "`b!ticketpanel` — Post the ticket panel.\n"
+            "`b!blacklist @user` — Open the blacklist menu.\n"
+            "`b!help` — Show this help menu.\n"
+            "`/help` — Show help privately."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="BRAX • Higher Staff Commands")
     await ctx.reply(embed=embed, mention_author=False)
 
 
@@ -1362,10 +1658,9 @@ async def brax_slash_help_command(interaction: discord.Interaction):
         description="Commands available to higher staff:",
         color=discord.Color.from_rgb(58, 48, 35),
     )
-    embed.add_field(name="b!ticketpanel", value="Posts the ticket panel in the configured tickets channel.", inline=False)
-    embed.add_field(name="b!blacklist @user", value="Opens the blacklist dropdown for the selected member.", inline=False)
-    embed.add_field(name="b!help", value="Shows this command list in the server.", inline=False)
-    embed.add_field(name="/help", value="Shows this command list as a private slash-command response.", inline=False)
+    embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
+    embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
+    embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!help, /help", inline=False)
     embed.set_footer(text="BRAX • Higher Staff Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1376,5 +1671,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: interaction-timeout-fix + deletion-permission-diagnostics")
+print("BRAX BUILD: moderation-commands + sapphire-style-help + mlog")
 bot.run(TOKEN)
