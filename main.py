@@ -9,6 +9,7 @@ import discord
 
 from collections import deque
 from discord import app_commands
+from discord.ext import commands
 
 # Load Wispbyte's .env file before reading any environment variables.
 # With the server working directory set to /home/container, this loads
@@ -71,7 +72,7 @@ intents.guilds = True
 intents.members = True
 intents.messages = True
 intents.message_content = True
-bot = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # In-memory only: message contents are not persisted across restarts.
 message_cache = OrderedDict()
