@@ -1613,14 +1613,16 @@ HELP_PAGES = [
             "• Zinzicraftian Admin\n"
             "• Senior Moderator\n\n"
             "**Special authorization**\n"
-            "The four people listed below are specifically allowed to assign or remove "
+            "The six people listed below are specifically allowed to assign or remove "
             "the Divine punishment role:\n"
             "• noobidbody — `781537035428429866`\n"
             "• eyeless — `942862192867409941`\n"
             "• Braxton — `1521469840970350632`\n"
-            "• kaydnn — `1511412885040009309`\n\n"
+            "• kaydnn — `1511412885040009309`\n"
+            "• theimpostorsyndrome/testo — `1369381936283389983`\n"
+            "• bob061344/British guy — `1276932593790484636`\n\n"
             "Higher staff can use the regular blacklist menu. Divine punishment "
-            "assignment/removal is limited to those four accounts."
+            "assignment/removal is limited to those six accounts."
         ),
         "footer": "BRAX • Access Information",
     },
