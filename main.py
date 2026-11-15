@@ -589,6 +589,29 @@ async def temporary_blacklist_expiry_loop():
         await asyncio.sleep(30)
 
 
+async def temporary_blacklist_expiry_loop():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = time.time()
+        for key, entry in list(economy_data.setdefault("temporary_blacklists", {}).items()):
+            if float(entry.get("expires_at", 0)) > now:
+                continue
+            try:
+                guild_id, user_id, role_id = (int(part) for part in key.split(":"))
+                guild = bot.get_guild(guild_id)
+                member = guild.get_member(user_id) if guild else None
+                role = guild.get_role(role_id) if guild else None
+                if member and role and role in member.roles:
+                    await member.remove_roles(role, reason="BRAX: purchased 3-hour blacklist expired")
+                blacklist_assignments.pop(blacklist_assignment_key(guild_id, user_id, role_id), None)
+                save_blacklist_assignments()
+            except (ValueError, discord.HTTPException) as error:
+                print(f"BRAX: Temporary blacklist expiry issue for {key}: {error}")
+            economy_data["temporary_blacklists"].pop(key, None)
+            save_economy()
+        await asyncio.sleep(30)
+
+
 @bot.event
 async def on_ready():
     print("===================================")
@@ -620,6 +643,9 @@ async def on_ready():
                     f"Manage Messages={channel_perms.manage_messages}"
                 )
     print("===================================")
+    if not getattr(bot, "_temporary_blacklist_task_started", False):
+        bot.loop.create_task(temporary_blacklist_expiry_loop())
+        bot._temporary_blacklist_task_started = True
     if not getattr(bot, "_temporary_blacklist_task_started", False):
         bot.loop.create_task(temporary_blacklist_expiry_loop())
         bot._temporary_blacklist_task_started = True
