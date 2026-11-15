@@ -814,6 +814,7 @@ async def on_member_update(before, after):
                 (assigned_by is not None and actor_id == assigned_by)
                 or expired_temporary
                 or bot_expiry_action
+                or actor_id == getattr(bot.user, "id", None)
             )
 
         if not allowed_to_remove:
