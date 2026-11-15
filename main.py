@@ -186,6 +186,16 @@ def refund_trade(guild_id, trade):
             if int(amount) > 0:
                 add_item(guild_id, user_id, item, int(amount))
 
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    trade = active_trade_for_channel(channel.id)
+    if trade is not None:
+        refund_trade(channel.guild.id, trade)
+        economy_data.setdefault("trades", {}).pop(str(channel.id), None)
+        save_economy()
+        print(f"BRAX: Refunded and cleared trade {channel.id} after its channel was deleted.")
+
 def award_message_coin(message):
     key = economy_key(message.guild.id, message.author.id)
     counts = economy_data.setdefault("message_counts", {})
@@ -866,7 +876,7 @@ async def on_message(message):
     if has_lesser_usage(member) and message.content.startswith("b!"):
         context = await bot.get_context(message)
         command_name = context.command.name if context.command else None
-        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel"}:
+        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview"}:
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
             strikes[str(member.id)] = count
@@ -2808,7 +2818,7 @@ async def trade_command(ctx,member:discord.Member):
         "b!offercoins <amount> — Add BRAX Coins to your offer.\n"
         "b!offeritem <amount> <item name> — Add items, e.g. b!offeritem 2 Scrap Metal.\n"
         "b!tradeconfirm — Lock your offer. Both people must confirm to complete.\n"
-        "b!tradecancel — Cancel and return all offered items and coins.\n\n"
+        "b!tradeview — See both current offers.\nb!tradecancel — Cancel and return all offered items and coins.\n\n"
         "Check b!inventory and b!balance. Offers are held until completion or cancellation.",
         allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
     await ctx.reply(f"Created your private trade channel: {channel.mention}",mention_author=False)
@@ -2847,6 +2857,27 @@ async def trade_offer_item_command(ctx,amount:int,*,item_name:str):
     if inventory[item]<=0: inventory.pop(item,None)
     offer["items"][item]=amount; trade["confirmed"]=[]; save_economy()
     await ctx.reply(f"Added **{amount} {item}** to your offer. Both traders must confirm again.",mention_author=False)
+
+
+@bot.command(name="tradeview")
+async def trade_view_command(ctx):
+    trade=active_trade_for_channel(ctx.channel.id)
+    if trade is None or ctx.author.id not in trade_member_ids(trade):
+        await ctx.reply("This isn't one of your active trade channels.",mention_author=False); return
+    lines=[]
+    for user_id in trade_member_ids(trade):
+        member=ctx.guild.get_member(user_id)
+        offer=trade_offer_for(trade,user_id)
+        label=member.display_name if member else f"User {user_id}"
+        lines.append(f"**{label}**")
+        lines.append(f"BRAX Coins: {int(offer.get('coins',0)):,}")
+        items=offer.get("items",{})
+        lines.extend(f"{name} × {int(count)}" for name,count in items.items() if int(count)>0)
+        if not items and not int(offer.get("coins",0)): lines.append("No offer added yet.")
+        lines.append("")
+    confirmed=trade.get("confirmed",[])
+    lines.append(f"Confirmations: **{len(confirmed)}/2**")
+    await ctx.reply(embed=discord.Embed(title="🤝 Current Trade Offers",description="\\n".join(lines),color=discord.Color.from_rgb(58,48,35)),mention_author=False)
 
 @bot.command(name="tradeconfirm")
 async def trade_confirm_command(ctx):
@@ -2955,7 +2986,7 @@ HELP_PAGES = [
             "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n"
             "`b!mine` — Dig for Mick & Rorty materials and collectibles. `b!inventory` — View your finds.\n"
             "`b!sell <item> [amount]` — Sell finds for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
-            "Inside a trade: `b!offercoins`, `b!offeritem`, `b!tradeconfirm`, `b!tradecancel`.\n\n"
+            "Inside a trade: `b!offercoins`, `b!offeritem`, `b!tradeview`, `b!tradeconfirm`, `b!tradecancel`.\n\n"
             "UWU lock is restricted to the bot owner, Braxton, and ch33zee, and requires Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
         ),
