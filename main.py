@@ -656,8 +656,11 @@ async def debt_collection_loop():
             strike = int(case.get("strike", 1))
             guild = bot.get_guild(guild_id)
             channel = guild.get_channel(channel_id) if guild else None
-            if coin_balance(guild_id, user_id) < 0:
-                set_coin_balance(guild_id, user_id, 0)
+            if coin_balance(guild_id, user_id) >= 0:
+                economy_data["debt_cases"].pop(key, None)
+                save_economy()
+                continue
+            set_coin_balance(guild_id, user_id, 0)
             if strike >= 2:
                 economy_data.setdefault("gamble_only", {})[key] = True
             economy_data["debt_cases"].pop(key, None)
