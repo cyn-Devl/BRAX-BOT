@@ -566,6 +566,30 @@ async def find_departure_action(member):
 
 
 @bot.event
+async def temporary_blacklist_expiry_loop():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = time.time()
+        for key, entry in list(economy_data.setdefault("temporary_blacklists", {}).items()):
+            if float(entry.get("expires_at", 0)) > now:
+                continue
+            try:
+                guild_id, user_id, role_id = (int(part) for part in key.split(":"))
+                guild = bot.get_guild(guild_id)
+                member = guild.get_member(user_id) if guild else None
+                role = guild.get_role(role_id) if guild else None
+                if member and role and role in member.roles:
+                    await member.remove_roles(role, reason="BRAX: purchased 3-hour blacklist expired")
+                blacklist_assignments.pop(blacklist_assignment_key(guild_id, user_id, role_id), None)
+                save_blacklist_assignments()
+            except (ValueError, discord.HTTPException) as error:
+                print(f"BRAX: Temporary blacklist expiry issue for {key}: {error}")
+            economy_data["temporary_blacklists"].pop(key, None)
+            save_economy()
+        await asyncio.sleep(30)
+
+
+@bot.event
 async def on_ready():
     print("===================================")
     print("BRAX IS ONLINE")
@@ -596,6 +620,9 @@ async def on_ready():
                     f"Manage Messages={channel_perms.manage_messages}"
                 )
     print("===================================")
+    if not getattr(bot, "_temporary_blacklist_task_started", False):
+        bot.loop.create_task(temporary_blacklist_expiry_loop())
+        bot._temporary_blacklist_task_started = True
     if not getattr(bot, "_brax_synced", False):
         bot.add_view(TicketPanelView())
         bot.add_view(TicketControlsView())
@@ -1478,8 +1505,10 @@ class BlacklistSelect(discord.ui.Select):
                 )
                 return
         elif not is_high_staff(interaction.user):
-            await interaction.response.send_message("You need the BRAX Usage role to use regular blacklist controls.", ephemeral=True)
-            return
+            uses_key = special_purchase_key(interaction.guild.id, interaction.user.id, "blacklist_uses")
+            if int(economy_data.setdefault("special_purchases", {}).get(uses_key, 0)) < 1:
+                await interaction.response.send_message("You need BRAX Usage or an unused 3-use blacklist unlock from the Special Shop.", ephemeral=True)
+                return
 
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("You need Manage Roles to use this.", ephemeral=True)
@@ -1503,6 +1532,14 @@ class BlacklistSelect(discord.ui.Select):
             return
         key = blacklist_assignment_key(guild.id, self.target.id, role_id)
         blacklist_assignments[key] = interaction.user.id
+        if not is_divine and not is_high_staff(interaction.user):
+            uses_key = special_purchase_key(guild.id, interaction.user.id, "blacklist_uses")
+            economy_data["special_purchases"][uses_key] = max(0, int(economy_data["special_purchases"].get(uses_key, 0)) - 1)
+            economy_data.setdefault("temporary_blacklists", {})[f"{guild.id}:{self.target.id}:{role_id}"] = {
+                "expires_at": time.time() + 10800,
+                "assigned_by": interaction.user.id,
+            }
+            save_economy()
         save_blacklist_assignments()
         if role_id == BLACKLIST_ROLES["Suggestion blacklist"]:
             await apply_suggestion_restriction(self.target)
@@ -1533,8 +1570,9 @@ class BlacklistView(discord.ui.View):
 
 @bot.command(name="blacklist")
 async def blacklist_command(ctx, user: discord.Member):
-    if not is_high_staff(ctx.author) and ctx.author.id not in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS:
-        await ctx.reply("You need the BRAX Usage role to use this command. The seven Divine-authorized users may also open this menu for Divine punishment only.", mention_author=False)
+    has_unlock = int(economy_data.setdefault("special_purchases", {}).get(special_purchase_key(ctx.guild.id, ctx.author.id, "blacklist_uses"), 0)) > 0
+    if not is_high_staff(ctx.author) and ctx.author.id not in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS and not has_unlock:
+        await ctx.reply("You need BRAX Usage, Divine authorization, or an unused blacklist unlock from the Special Shop.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_roles:
         await ctx.reply("You also need the **Manage Roles** permission.", mention_author=False)
