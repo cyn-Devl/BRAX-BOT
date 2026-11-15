@@ -40,9 +40,6 @@ EMOJIS = {
 }
 MAX_MESSAGE_CACHE = 5000
 AUDIT_LOOKBACK_SECONDS = 30
-DUPLICATE_WINDOW_SECONDS = 60
-DUPLICATE_GIF_URL = "https://media.tenor.com/QTG7rHOz300AAAAM/goku-namek.gif"
-MIN_DUPLICATE_LENGTH = 12
 
 # BRAX blacklist and ticket configuration
 BLACKLIST_ROLES = {
@@ -190,7 +187,7 @@ MINING_LOOT = [
 ]
 MINING_ITEM_LOOKUP = {name.casefold(): name for name, _, _ in MINING_LOOT}
 MINING_ITEM_VALUES = {name: value for name, value, _ in MINING_LOOT}
-MINING_COOLDOWN_SECONDS = 30
+MINING_COOLDOWN_SECONDS = 2.5
 TRADE_CATEGORY_ID = 1571397522289729686
 
 def inventory_key(guild_id, user_id):
@@ -390,7 +387,6 @@ async def on_command_error(ctx, error):
 # In-memory only: message contents are not persisted across restarts.
 message_cache = OrderedDict()
 # Tracks recent messages by server, channel, and normalized text.
-recent_messages = {}
 
 
 def shorten(value, limit=1024):
@@ -1084,56 +1080,6 @@ async def on_message(message):
         except discord.HTTPException as error:
             print(f"BRAX UWU: relay failed in #{message.channel}: {error}")
         return
-
-    # Detect another member repeating the same text in the same channel.
-    # Case and extra whitespace are ignored when comparing messages.
-    normalized = " ".join(message.content.casefold().split())
-
-    # Gambling commands are intentional repeated actions, not duplicate spam.
-    if len(normalized) >= MIN_DUPLICATE_LENGTH and not normalized.startswith("b!gamble"):
-        now = time.monotonic()
-
-        # Remove expired entries so this stays small over time.
-        expired = [
-            key for key, value in recent_messages.items()
-            if now - value["time"] > DUPLICATE_WINDOW_SECONDS
-        ]
-        for key in expired:
-            recent_messages.pop(key, None)
-
-        duplicate_key = (message.guild.id, message.channel.id, normalized)
-        previous = recent_messages.get(duplicate_key)
-
-        if (
-            previous is not None
-            and previous["author_id"] != message.author.id
-            and now - previous["time"] <= DUPLICATE_WINDOW_SECONDS
-        ):
-            try:
-                await message.delete()
-                await message.channel.send(
-                    DUPLICATE_GIF_URL,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                print(
-                    f"BRAX: Removed duplicate message from {message.author} "
-                    f"in #{message.channel}."
-                )
-            except discord.Forbidden:
-                print(
-                    "BRAX: Cannot remove duplicate message. "
-                    "Give the bot Manage Messages permission."
-                )
-            except discord.HTTPException as error:
-                print(f"BRAX: Duplicate-message action failed: {error}")
-            return
-
-        # Keep the first person's message as the original.
-        if previous is None:
-            recent_messages[duplicate_key] = {
-                "author_id": message.author.id,
-                "time": now,
-            }
 
     message_cache[message.id] = {
         "author": message.author,
@@ -3085,134 +3031,205 @@ async def sell_command(ctx,*,item_and_amount:str):
     proceeds=MINING_ITEM_VALUES[item]*quantity; add_coins(ctx.guild.id,ctx.author.id,proceeds); save_economy()
     await ctx.reply(f"💰 Sold **{quantity} {item}** for **{proceeds:,}** {BRAX_COINS_EMOJI}. New balance: **{coin_balance(ctx.guild.id,ctx.author.id):,}**.",mention_author=False)
 
+trade_completion_lock = asyncio.Lock()
+
 @bot.command(name="trade")
-async def trade_command(ctx,member:discord.Member):
-    if member.bot or member.id==ctx.author.id:
-        await ctx.reply("Choose another human member to trade with.",mention_author=False); return
+async def trade_command(ctx, member: discord.Member):
+    if member.bot or member.id == ctx.author.id:
+        await ctx.reply("Choose another human member to trade with.", mention_author=False)
+        return
     if not ctx.guild.me.guild_permissions.manage_channels:
-        await ctx.reply("I need Manage Channels permission to open a private trade channel.",mention_author=False); return
-    for active in economy_data.setdefault("trades",{}).values():
+        await ctx.reply("I need Manage Channels permission to open a private trade channel.", mention_author=False)
+        return
+    for active in economy_data.setdefault("trades", {}).values():
         if ctx.author.id in trade_member_ids(active) or member.id in trade_member_ids(active):
-            await ctx.reply("One of you already has an active trade. Finish or cancel it first.",mention_author=False); return
-    category=ctx.guild.get_channel(TRADE_CATEGORY_ID)
-    if not isinstance(category,discord.CategoryChannel):
-        await ctx.reply("I couldn't find the configured trade category. Check the category ID.",mention_author=False); return
-    overwrites={
-        ctx.guild.default_role:discord.PermissionOverwrite(view_channel=False),
-        ctx.author:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),
-        member:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),
-        ctx.guild.me:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,manage_channels=True),
+            await ctx.reply("One of you already has an active trade. Finish or cancel it first.", mention_author=False)
+            return
+    category = ctx.guild.get_channel(TRADE_CATEGORY_ID)
+    if not isinstance(category, discord.CategoryChannel):
+        await ctx.reply("I couldn't find the configured trade category. Check the category ID.", mention_author=False)
+        return
+    overwrites = {
+        ctx.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        ctx.author: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        ctx.guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True),
     }
     for role in ctx.guild.roles:
         if role != ctx.guild.default_role:
             overwrites[role] = discord.PermissionOverwrite(view_channel=False)
     try:
-        channel=await ctx.guild.create_text_channel(name=f"trade-{ctx.author.name[:12]}-{member.name[:12]}".lower(),category=category,overwrites=overwrites,topic=f"Private BRAX trade between {ctx.author.id} and {member.id}",reason="BRAX player trade")
+        channel = await ctx.guild.create_text_channel(
+            name=f"trade-{ctx.author.name[:12]}-{member.name[:12]}".lower(),
+            category=category,
+            overwrites=overwrites,
+            topic=f"Private BRAX trade between {ctx.author.id} and {member.id}",
+            reason="BRAX player trade",
+        )
     except discord.HTTPException as error:
         print(f"BRAX: Could not create trade channel: {error}")
-        await ctx.reply("I couldn't create the trade channel. Check Manage Channels permission and category access.",mention_author=False); return
-    economy_data.setdefault("trades",{})[str(channel.id)]={
-        "guild_id":ctx.guild.id,"channel_id":channel.id,"user_ids":[ctx.author.id,member.id],
-        "offers":{str(ctx.author.id):{"coins":0,"items":{}},str(member.id):{"coins":0,"items":{}}},"confirmed":[],
+        await ctx.reply("I couldn't create the trade channel. Check Manage Channels permission and category access.", mention_author=False)
+        return
+    economy_data.setdefault("trades", {})[str(channel.id)] = {
+        "guild_id": ctx.guild.id,
+        "channel_id": channel.id,
+        "user_ids": [ctx.author.id, member.id],
+        "offers": {
+            str(ctx.author.id): {"coins": 0, "items": {}},
+            str(member.id): {"coins": 0, "items": {}},
+        },
+        "confirmed": [],
+        "status": "open",
     }
     save_economy()
     await channel.send(
-        f"{ctx.author.mention} {member.mention} — your private trade is open.\n\n"
-        "b!offercoins <amount> — Add BRAX Coins to your offer.\n"
-        "b!offeritem <amount> <item name> — Add items, e.g. b!offeritem 2 Scrap Metal.\n"
-        "b!tradeconfirm — Lock your offer. Both people must confirm to complete.\n"
-        "b!tradeview — See both current offers.\nb!tradecancel — Cancel and return all offered items and coins.\n\n"
-        "Check b!inventory and b!balance. Offers are held until completion or cancellation.",
-        allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
-    await ctx.reply(f"Created your private trade channel: {channel.mention}",mention_author=False)
+        f"{ctx.author.mention} {member.mention} — private trade opened.\n"
+        "Use b!offercoins <amount>, b!offeritem <amount> <item>, b!tradeview, "
+        "b!tradeconfirm, or b!tradecancel. Changing an offer resets both confirmations.",
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
+    await ctx.reply(f"Created your private trade channel: {channel.mention}", mention_author=False)
+
 
 @bot.command(name="offercoins")
-async def trade_offer_coins_command(ctx,amount:int):
-    trade=active_trade_for_channel(ctx.channel.id)
-    if trade is None or ctx.author.id not in trade_member_ids(trade):
-        await ctx.reply("Use this command inside your active trade channel.",mention_author=False); return
-    if amount<0:
-        await ctx.reply("Offer amount must be zero or more.",mention_author=False); return
-    offer=trade_offer_for(trade,ctx.author.id); old=int(offer.get("coins",0))
-    if old: add_coins(ctx.guild.id,ctx.author.id,old)
-    if amount and not spend_coins(ctx.guild.id,ctx.author.id,amount):
-        if old: spend_coins(ctx.guild.id,ctx.author.id,old)
-        await ctx.reply("You don't have enough BRAX Coins for that offer.",mention_author=False); return
-    offer["coins"]=amount; trade["confirmed"]=[]; save_economy()
-    await ctx.reply(f"Your coin offer is now **{amount:,}** {BRAX_COINS_EMOJI}. Both traders must confirm again.",mention_author=False)
+async def trade_offer_coins_command(ctx, amount: int):
+    trade = active_trade_for_channel(ctx.channel.id)
+    if trade is None or ctx.author.id not in trade_member_ids(trade) or trade.get("status", "open") != "open":
+        await ctx.reply("Use this command inside your active trade channel.", mention_author=False)
+        return
+    if amount < 0:
+        await ctx.reply("Offer amount must be zero or more.", mention_author=False)
+        return
+    offer = trade_offer_for(trade, ctx.author.id)
+    old = int(offer.get("coins", 0))
+    available = coin_balance(ctx.guild.id, ctx.author.id) + old
+    if amount > available:
+        await ctx.reply(f"You have {available:,} coins available for this offer.", mention_author=False)
+        return
+    set_coin_balance(ctx.guild.id, ctx.author.id, available - amount)
+    offer["coins"] = amount
+    trade["confirmed"] = []
+    save_economy()
+    await ctx.reply(f"Coin offer updated to {amount:,}. Both confirmations were reset.", mention_author=False)
+
 
 @bot.command(name="offeritem")
-async def trade_offer_item_command(ctx,amount:int,*,item_name:str):
-    trade=active_trade_for_channel(ctx.channel.id)
-    if trade is None or ctx.author.id not in trade_member_ids(trade):
-        await ctx.reply("Use this command inside your active trade channel.",mention_author=False); return
-    item=normalize_mining_item(item_name)
-    if item is None or amount<1:
-        await ctx.reply("Use b!offeritem <amount> <item name> with an item from b!inventory.",mention_author=False); return
-    inventory=get_inventory(ctx.guild.id,ctx.author.id); offer=trade_offer_for(trade,ctx.author.id)
-    current=int(offer.setdefault("items",{}).get(item,0))
-    if current:
-        add_item(ctx.guild.id,ctx.author.id,item,current); inventory=get_inventory(ctx.guild.id,ctx.author.id)
-        offer["items"].pop(item,None)
-    if int(inventory.get(item,0))<amount:
-        await ctx.reply(f"You don't have **{amount} {item}** available.",mention_author=False); return
-    inventory[item]=int(inventory.get(item,0))-amount
-    if inventory[item]<=0: inventory.pop(item,None)
-    offer["items"][item]=amount; trade["confirmed"]=[]; save_economy()
-    await ctx.reply(f"Added **{amount} {item}** to your offer. Both traders must confirm again.",mention_author=False)
+async def trade_offer_item_command(ctx, amount: int, *, item_name: str):
+    trade = active_trade_for_channel(ctx.channel.id)
+    if trade is None or ctx.author.id not in trade_member_ids(trade) or trade.get("status", "open") != "open":
+        await ctx.reply("Use this command inside your active trade channel.", mention_author=False)
+        return
+    item = normalize_mining_item(item_name)
+    if item is None or amount < 1:
+        await ctx.reply("Use b!offeritem <amount> <item name> with an item from b!inventory.", mention_author=False)
+        return
+    offer = trade_offer_for(trade, ctx.author.id)
+    old = int(offer.setdefault("items", {}).get(item, 0))
+    inventory = get_inventory(ctx.guild.id, ctx.author.id)
+    available = int(inventory.get(item, 0)) + old
+    if amount > available:
+        await ctx.reply(f"You have {available} {item} available for this offer.", mention_author=False)
+        return
+    remaining = available - amount
+    if remaining:
+        inventory[item] = remaining
+    else:
+        inventory.pop(item, None)
+    offer["items"][item] = amount
+    trade["confirmed"] = []
+    save_economy()
+    await ctx.reply(f"Item offer updated: {amount} {item}. Both confirmations were reset.", mention_author=False)
 
 
 @bot.command(name="tradeview")
 async def trade_view_command(ctx):
-    trade=active_trade_for_channel(ctx.channel.id)
+    trade = active_trade_for_channel(ctx.channel.id)
     if trade is None or ctx.author.id not in trade_member_ids(trade):
-        await ctx.reply("This isn't one of your active trade channels.",mention_author=False); return
-    lines=[]
-    for user_id in trade_member_ids(trade):
-        member=ctx.guild.get_member(user_id)
-        offer=trade_offer_for(trade,user_id)
-        label=member.display_name if member else f"User {user_id}"
+        await ctx.reply("This isn't one of your active trade channels.", mention_author=False)
+        return
+    lines = []
+    for uid in trade_member_ids(trade):
+        member = ctx.guild.get_member(uid)
+        offer = trade_offer_for(trade, uid)
+        label = member.display_name if member else f"User {uid}"
         lines.append(f"**{label}**")
-        lines.append(f"BRAX Coins: {int(offer.get('coins',0)):,}")
-        items=offer.get("items",{})
-        lines.extend(f"{name} × {int(count)}" for name,count in items.items() if int(count)>0)
-        if not items and not int(offer.get("coins",0)): lines.append("No offer added yet.")
-        lines.append("")
-    confirmed=trade.get("confirmed",[])
-    lines.append(f"Confirmations: **{len(confirmed)}/2**")
-    await ctx.reply(embed=discord.Embed(title="🤝 Current Trade Offers",description="\n".join(lines),color=discord.Color.from_rgb(58,48,35)),mention_author=False)
+        lines.append(f"BRAX Coins: {int(offer.get('coins', 0)):,}")
+        lines.extend(f"{name} x {int(count)}" for name, count in offer.get("items", {}).items() if int(count) > 0)
+    confirmed = set(int(uid) for uid in trade.get("confirmed", []))
+    lines.append(f"Confirmations: {len(confirmed.intersection(trade_member_ids(trade)))}/2")
+    await ctx.reply(
+        embed=discord.Embed(title="Current Trade Offers", description=shorten("\n".join(lines), 4000), color=discord.Color.from_rgb(58, 48, 35)),
+        mention_author=False,
+    )
+
 
 @bot.command(name="tradeconfirm")
 async def trade_confirm_command(ctx):
-    trade=active_trade_for_channel(ctx.channel.id)
-    if trade is None or ctx.author.id not in trade_member_ids(trade):
-        await ctx.reply("This isn't one of your active trade channels.",mention_author=False); return
-    confirmed=trade.setdefault("confirmed",[])
-    if ctx.author.id not in confirmed: confirmed.append(ctx.author.id)
-    save_economy()
-    if any(uid not in confirmed for uid in trade_member_ids(trade)):
-        await ctx.reply("Your offer is locked. Waiting for the other trader to use b!tradeconfirm.",mention_author=False); return
-    guild_id=ctx.guild.id; ids=trade_member_ids(trade)
-    offer_a,offer_b=trade_offer_for(trade,ids[0]),trade_offer_for(trade,ids[1])
-    add_coins(guild_id,ids[0],int(offer_b.get("coins",0))); add_coins(guild_id,ids[1],int(offer_a.get("coins",0)))
-    for item,count in offer_b.get("items",{}).items(): add_item(guild_id,ids[0],item,int(count))
-    for item,count in offer_a.get("items",{}).items(): add_item(guild_id,ids[1],item,int(count))
-    economy_data.setdefault("trades",{}).pop(str(ctx.channel.id),None); save_economy()
-    await ctx.send("✅ **TRADE COMPLETE!** Both offers have been exchanged. This channel will now close.")
+    async with trade_completion_lock:
+        trade = active_trade_for_channel(ctx.channel.id)
+        if trade is None or ctx.author.id not in trade_member_ids(trade) or trade.get("status", "open") != "open":
+            await ctx.reply("This is not an open trade channel for you.", mention_author=False)
+            return
+        ids = trade_member_ids(trade)
+        if len(ids) != 2 or len(set(ids)) != 2:
+            await ctx.reply("Trade participant data is invalid. Cancel the trade to refund its offers.", mention_author=False)
+            return
+        confirmed = set(int(uid) for uid in trade.get("confirmed", []))
+        confirmed.add(ctx.author.id)
+        trade["confirmed"] = list(confirmed)
+        save_economy()
+        if not all(uid in confirmed for uid in ids):
+            await ctx.reply(
+                f"Confirmation saved ({len(confirmed.intersection(ids))}/2). The other trader must review b!tradeview and confirm.",
+                mention_author=False,
+            )
+            return
+
+        # Complete once, while holding the lock, and save all transfers together.
+        trade["status"] = "completing"
+        offers = {uid: trade_offer_for(trade, uid) for uid in ids}
+        guild_id = int(trade.get("guild_id", ctx.guild.id))
+        balances = economy_data.setdefault("balances", {})
+        for sender, receiver in ((ids[0], ids[1]), (ids[1], ids[0])):
+            amount = int(offers[sender].get("coins", 0))
+            if amount:
+                receiver_key = economy_key(guild_id, receiver)
+                balances[receiver_key] = int(balances.get(receiver_key, 0)) + amount
+            for item, count in offers[sender].get("items", {}).items():
+                count = int(count)
+                if count > 0:
+                    inv = get_inventory(guild_id, receiver)
+                    inv[item] = int(inv.get(item, 0)) + count
+        economy_data.setdefault("trades", {}).pop(str(ctx.channel.id), None)
+        save_economy()
+
+    await ctx.send("TRADE COMPLETE! Both offers have been transferred. This channel will close shortly.")
     await asyncio.sleep(5)
-    try: await ctx.channel.delete(reason="BRAX trade completed")
-    except discord.HTTPException as error: print(f"BRAX: Could not delete completed trade channel: {error}")
+    try:
+        await ctx.channel.delete(reason="BRAX trade completed")
+    except discord.HTTPException as error:
+        print(f"BRAX: Could not delete completed trade channel: {error}")
+
 
 @bot.command(name="tradecancel")
 async def trade_cancel_command(ctx):
-    trade=active_trade_for_channel(ctx.channel.id)
-    if trade is None or ctx.author.id not in trade_member_ids(trade):
-        await ctx.reply("This isn't one of your active trade channels.",mention_author=False); return
-    refund_trade(ctx.guild.id,trade); economy_data.setdefault("trades",{}).pop(str(ctx.channel.id),None); save_economy()
-    await ctx.send("Trade cancelled. All offered BRAX Coins and items have been returned. This channel will close.")
+    async with trade_completion_lock:
+        trade = active_trade_for_channel(ctx.channel.id)
+        if trade is None or ctx.author.id not in trade_member_ids(trade):
+            await ctx.reply("This is not one of your active trade channels.", mention_author=False)
+            return
+        if trade.get("status") == "completing":
+            await ctx.reply("This trade is already completing.", mention_author=False)
+            return
+        refund_trade(ctx.guild.id, trade)
+        economy_data.setdefault("trades", {}).pop(str(ctx.channel.id), None)
+        save_economy()
+    await ctx.send("Trade cancelled. All offered coins and items were returned. This channel will close.")
     await asyncio.sleep(5)
-    try: await ctx.channel.delete(reason="BRAX trade cancelled")
-    except discord.HTTPException as error: print(f"BRAX: Could not delete cancelled trade channel: {error}")
+    try:
+        await ctx.channel.delete(reason="BRAX trade cancelled")
+    except discord.HTTPException as error:
+        print(f"BRAX: Could not delete cancelled trade channel: {error}")
 
 
 HELP_PAGES = [
