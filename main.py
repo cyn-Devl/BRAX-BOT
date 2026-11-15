@@ -2118,7 +2118,7 @@ class UwuListView(discord.ui.View):
 
     async def interaction_check(self, interaction):
         if not is_uwu_authorized(interaction.user):
-            await interaction.response.send_message("Only the bot owner and Braxton can manage UWU locks.", ephemeral=True)
+            await interaction.response.send_message("Only the bot owner, Braxton, and ch33zee can manage UWU locks.", ephemeral=True)
             return False
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("Only the person who opened this list can use its controls.", ephemeral=True)
@@ -2790,6 +2790,9 @@ async def trade_command(ctx,member:discord.Member):
         member:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),
         ctx.guild.me:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,manage_channels=True),
     }
+    for role in ctx.guild.roles:
+        if role != ctx.guild.default_role:
+            overwrites[role] = discord.PermissionOverwrite(view_channel=False)
     try:
         channel=await ctx.guild.create_text_channel(name=f"trade-{ctx.author.name[:12]}-{member.name[:12]}".lower(),category=category,overwrites=overwrites,topic=f"Private BRAX trade between {ctx.author.id} and {member.id}",reason="BRAX player trade")
     except discord.HTTPException as error:
@@ -2894,10 +2897,10 @@ HELP_PAGES = [
             "• <:Kaydn:1571324228127690954> kaydnn — `1511412885040009309`\n"
             "• theimpostorsyndrome/testo — `1369381936283389983`\n"
             "• bob061344/British guy — `1276932593790484636`\n"
-            "• Additional authorized user — `718619652187750411`\n\n"
+            "• User ID `718619652187750411`\n\n"
             "Members with brax usage can use regular blacklist controls but cannot use "
             "Divine punishment unless their user ID is separately on the authorization list. "
-            "The six authorized accounts can open the blacklist menu for Divine punishment only. "
+            "The seven authorized accounts can open the blacklist menu for Divine punishment only. "
             "Only Braxton and kaydnn can grant the brax usage role with `b!usageadd @user`."
         ),
         "footer": "BRAX • Access Information",
@@ -2974,7 +2977,7 @@ LESSER_FUN_HELP_PAGE = {
     "title": "<:Fun:1571324174394200085> Fun",
     "description": (
         "`b!mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n\n"
-        "Use the forward button to view the gambling commands."
+        "You can also use b!mine to dig, b!inventory to view finds, b!sell <item> to sell, and b!trade @member to open a private trade.\n\nUse the forward button to view the gambling commands."
     ),
     "footer": "BRAX • Lesser B Usage",
 }
@@ -3071,7 +3074,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
     embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
     embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!lusageadd @user, b!help, /help", inline=False)
-    embed.add_field(name="Fun & Economy", value="b!mweute, b!uwu, b!balance, b!shop, b!store, b!buy, b!coinflip, b!gamble (2x–30x), b!coinlb, b!stocks", inline=False)
+    embed.add_field(name="Fun, Economy & Mining", value="b!mweute, b!uwu, b!balance, b!shop, b!buy, b!coinflip, b!gamble, b!coinlb, b!stocks, b!mine, b!inventory, b!sell, b!trade", inline=False)
     embed.set_footer(text="BRAX • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
