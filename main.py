@@ -2970,6 +2970,10 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
             strike = int(debt_cases[debt_key].get("strike", 1))
         debt_note = f" FBI/Zinzicraft has been notified. You have 5 minutes to settle the debt (case {strike})."
     else:
+        debt_key = economy_key(ctx.guild.id, ctx.author.id)
+        if debt_key in economy_data.setdefault("debt_cases", {}):
+            economy_data["debt_cases"].pop(debt_key, None)
+            save_economy()
         debt_note = ""
     await ctx.reply(
         (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount}** coin bet at **{multiplier}x**.")
