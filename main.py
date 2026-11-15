@@ -649,6 +649,32 @@ async def temporary_blacklist_expiry_loop():
         await asyncio.sleep(30)
 
 
+async def send_agency_webhook(guild, channel, agency, content):
+    """Send a clearly labelled TBR/TFHSA notice through a reusable channel webhook."""
+    if channel is None:
+        return False
+    webhook_name = agency.upper()
+    try:
+        hooks = await channel.webhooks()
+        webhook = next((item for item in hooks if item.name == webhook_name), None)
+        if webhook is None:
+            webhook = await channel.create_webhook(name=webhook_name, reason=f"{webhook_name} economy notice")
+        await webhook.send(
+            content=content,
+            username=webhook_name,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return True
+    except (discord.Forbidden, discord.HTTPException, AttributeError) as error:
+        print(f"BRAX {webhook_name}: webhook unavailable in {getattr(channel, 'id', 'unknown')}: {error}")
+        try:
+            await channel.send(content, allowed_mentions=discord.AllowedMentions.none())
+            return True
+        except discord.HTTPException as fallback_error:
+            print(f"BRAX {webhook_name}: fallback notice failed: {fallback_error}")
+            return False
+
+
 async def tbr_tax_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -658,6 +684,7 @@ async def tbr_tax_loop():
             treasury_key = str(guild.id)
             collected = 0
             taxed_members = 0
+            channel = guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID)
 
             for account_key, raw_balance in list(balances.items()):
                 if not account_key.startswith(f"{guild.id}:"):
@@ -668,12 +695,16 @@ async def tbr_tax_loop():
                 except (ValueError, TypeError):
                     continue
 
-                tokens = token_balance(guild.id, user_id)
-                if wallet <= 100 and tokens < 2:
+                # Tax is based only on the member's personal BRAX Coin wallet.
+                if wallet < 100:
                     continue
+                if wallet <= 10_000:
+                    tax_rate = random.uniform(0.15, 0.45)
+                elif wallet < 100_000:
+                    tax_rate = random.uniform(0.35, 0.45)
+                else:
+                    tax_rate = random.uniform(0.45, 0.75)
 
-                # TBR takes 35–75% of the member's current personal BRAX Coin wallet.
-                tax_rate = random.uniform(0.35, 0.75)
                 tax_amount = min(wallet, int(wallet * tax_rate))
                 if tax_amount <= 0:
                     continue
@@ -682,19 +713,27 @@ async def tbr_tax_loop():
                 treasury[treasury_key] = int(treasury.get(treasury_key, 0)) + tax_amount
                 collected += tax_amount
                 taxed_members += 1
+                percentage = tax_rate * 100
+                await send_agency_webhook(
+                    guild,
+                    channel,
+                    "TBR",
+                    f"Yo <@{user_id}>! We taxed you **{percentage:.2f}%** and collected "
+                    f"**{tax_amount:,}** {BRAX_COINS_EMOJI} from your personal wallet. "
+                    f"Thanks for the money — it's going into the jobs fund!",
+                )
 
             if collected:
                 save_economy()
-                channel = guild.system_channel
-                if channel is not None:
-                    try:
-                        await channel.send(
-                            f"🏛️ **TBR Tax Collection:** TBR collected **{collected:,}** {BRAX_COINS_EMOJI} "
-                            f"directly from **{taxed_members}** eligible personal wallets (35–75% per wallet) "
-                            f"and transferred it to the **TFHSA treasury**. Treasury: **{int(treasury.get(treasury_key, 0)):,}** {BRAX_COINS_EMOJI}."
-                        )
-                    except discord.HTTPException as error:
-                        print(f"BRAX TBR tax announcement failed in {guild.id}: {error}")
+                await send_agency_webhook(
+                    guild,
+                    channel,
+                    "TBR",
+                    f"Tax cycle complete: collected **{collected:,}** {BRAX_COINS_EMOJI} "
+                    f"from **{taxed_members}** personal wallets. The funds have been transferred "
+                    f"to the TFHSA treasury for the jobs fund. Treasury balance: "
+                    f"**{int(treasury.get(treasury_key, 0)):,}** {BRAX_COINS_EMOJI}.",
+                )
 
         await asyncio.sleep(180)
 
@@ -724,13 +763,14 @@ async def debt_collection_loop():
             if channel is None and guild is not None:
                 channel = guild.system_channel
             if channel is not None:
-                try:
-                    if strike == 1:
-                        await channel.send(f"TFHSA collected <@{user_id}>'s overdue BRAX debt and cleared the negative balance.")
-                    else:
-                        await channel.send(f"TFHSA returned for <@{user_id}>. Debt cleared, but the mining license is revoked. BRAX economy commands are now limited to b!jobs, b!job, b!work, b!balance, and b!help.")
-                except discord.HTTPException as error:
-                    print(f"BRAX debt notice failed for {key}: {error}")
+                if strike == 1:
+                    notice = f"<@{user_id}>'s overdue BRAX debt was collected and the negative balance was cleared."
+                else:
+                    notice = (
+                        f"TFHSA returned for <@{user_id}>. Debt cleared, but the mining license is revoked. "
+                        "BRAX economy commands are now limited to b!jobs, b!job, b!work, b!balance, and b!help."
+                    )
+                await send_agency_webhook(guild, channel, "TFHSA", notice)
         await asyncio.sleep(5)
 
 
