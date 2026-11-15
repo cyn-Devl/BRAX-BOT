@@ -98,6 +98,11 @@ except (OSError, json.JSONDecodeError):
 economy_data.setdefault("inventories", {})
 economy_data.setdefault("mine_cooldowns", {})
 economy_data.setdefault("trades", {})
+economy_data.setdefault("tokens", {})
+economy_data.setdefault("special_purchases", {})
+economy_data.setdefault("temporary_blacklists", {})
+economy_data.setdefault("protection", {})
+economy_data.setdefault("gamble_luck", {})
 
 def save_economy():
     with open(ECONOMY_FILE, "w", encoding="utf-8") as file:
@@ -121,6 +126,46 @@ def spend_coins(guild_id, user_id, amount):
     if amount < 0 or balance < amount:
         return False
     set_coin_balance(guild_id, user_id, balance - amount)
+    return True
+
+def token_balance(guild_id, user_id):
+    return int(economy_data.setdefault("tokens", {}).get(economy_key(guild_id, user_id), 0))
+
+def set_token_balance(guild_id, user_id, amount):
+    economy_data.setdefault("tokens", {})[economy_key(guild_id, user_id)] = max(0, int(amount))
+    save_economy()
+
+def add_tokens(guild_id, user_id, amount):
+    set_token_balance(guild_id, user_id, token_balance(guild_id, user_id) + int(amount))
+
+def spend_tokens(guild_id, user_id, amount):
+    current = token_balance(guild_id, user_id)
+    if amount < 0 or current < amount:
+        return False
+    set_token_balance(guild_id, user_id, current - amount)
+    return True
+
+def special_purchase_key(guild_id, user_id, name):
+    return f"{guild_id}:{user_id}:{name}"
+
+def protection_key(guild_id, user_id, kind):
+    return f"{guild_id}:{user_id}:{kind}"
+
+def get_protection(guild_id, user_id, kind):
+    return int(economy_data.setdefault("protection", {}).get(protection_key(guild_id, user_id, kind), 0))
+
+def add_protection(guild_id, user_id, kind, amount):
+    key = protection_key(guild_id, user_id, kind)
+    economy_data.setdefault("protection", {})[key] = max(0, get_protection(guild_id, user_id, kind) + int(amount))
+    save_economy()
+
+def consume_protection(guild_id, user_id, kind):
+    key = protection_key(guild_id, user_id, kind)
+    current = get_protection(guild_id, user_id, kind)
+    if current <= 0:
+        return False
+    economy_data["protection"][key] = current - 1
+    save_economy()
     return True
 
 
