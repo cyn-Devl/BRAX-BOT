@@ -2877,7 +2877,8 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
         await ctx.reply(f"Not enough BRAX Coins. Your balance is {balance} {BRAX_COINS_EMOJI}. Bets above 10x can put you in debt.", mention_author=False)
         return
     # Higher multipliers are riskier. A win chance of 1/multiplier keeps the payout odds aligned.
-    won = random.randrange(multiplier) == 0
+    luck = max(1, int(economy_data.setdefault('gamble_luck', {}).get(economy_key(ctx.guild.id, ctx.author.id), 1)))
+    won = random.randrange(multiplier) < luck
     set_coin_balance(ctx.guild.id, ctx.author.id, balance - amount)
     if won:
         add_coins(ctx.guild.id, ctx.author.id, amount * multiplier)
