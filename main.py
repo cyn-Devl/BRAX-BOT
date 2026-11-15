@@ -879,7 +879,8 @@ async def on_message(message):
     # Case and extra whitespace are ignored when comparing messages.
     normalized = " ".join(message.content.casefold().split())
 
-    if len(normalized) >= MIN_DUPLICATE_LENGTH:
+    # Gambling commands are intentional repeated actions, not duplicate spam.
+    if len(normalized) >= MIN_DUPLICATE_LENGTH and not normalized.startswith("b!gamble"):
         now = time.monotonic()
 
         # Remove expired entries so this stays small over time.
