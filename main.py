@@ -4,13 +4,12 @@ import asyncio
 import re
 import time
 import io
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from datetime import timedelta
 
 from dotenv import load_dotenv
 import discord
 
-from collections import deque
 from discord import app_commands
 from discord.ext import commands
 
@@ -50,7 +49,7 @@ BLACKLIST_ROLES = {
     "Application blacklist": 1564081888123953152,
     "Image blacklist": 1571274714414973009,
     "Role blacklist": 1570618973731688468,
-    "Staff blacklist": 1570148574480830626,
+    "Staff blacklist": 1570148574480830628,
     "Divine punishment": 1571292901659644024,
 }
 GENERAL_CHANNEL_ID = 1561145710361976882
@@ -2481,5 +2480,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: owner-braxton-uwu + uwu-list + lesser-usage-fun-only + permanent-lesser-role-revoke + lesser-usage-grant + five-page-help")
+print("BRAX BUILD: full-main-py-rewrite-2026-11-14 | owner-braxton-uwu | uwu-list | lesser-usage-fun-only | permanent-lesser-role-revoke | lesser-usage-grant | five-page-help")
 bot.run(TOKEN)
