@@ -1737,13 +1737,13 @@ HELP_PAGES = [
         "title": "<:Moderation:1571302568070611045> Moderation",
         "description": (
             "`b!timeout @user 10m reason` — Timeout a member. Aliases: `b!mute`, `b!tempmute`. "
-            "Duration and reason are required; supports s, m, h, d, w (maximum 28 days).\n"
+            "Requires Moderate Members; mention a member and provide duration and reason (maximum 28 days).\n"
             "`b!untimeout @user [reason]` — Remove a timeout. Aliases: `b!unmute`, `b!removetimeout`.\n"
-            "`b!kick @user [reason]` — Kick a member.\n"
-            "`b!ban @user [reason]` — Ban a member.\n"
-            "`b!unban userID [reason]` — Unban by user ID.\n"
-            "`b!roleadd @user @role [reason]` — Give a role. Alias: `b!addrole`.\n"
-            "`b!roleremove @user @role [reason]` — Remove a role. Alias: `b!removerole`."
+            "`b!kick @user [reason]` — Kick a mentioned member. Requires Kick Members.\n"
+            "`b!ban @user [reason]` — Ban a mentioned member. Requires Ban Members.\n"
+            "`b!unban userID [reason]` — Unban by user ID. Requires Ban Members.\n"
+            "`b!roleadd @user @role [reason]` — Give a role. Requires Manage Roles and member/role mentions.\n"
+            "`b!roleremove @user @role [reason]` — Remove a role. Requires Manage Roles and member/role mentions."
         ),
         "footer": "BRAX • Moderation",
     },
