@@ -971,15 +971,19 @@ async def relay_uwu_message(message):
                 if webhook is None:
                     webhook = await webhook_channel.create_webhook(name="BRAX UWU Relay")
                 uwu_webhooks[webhook_channel.id] = webhook
-            await webhook.send(
-                content=content,
-                username=shorten(f"{message.author.display_name} (uwu)", 80),
-                avatar_url=message.author.display_avatar.url,
-                thread=thread,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
+            webhook_kwargs = {
+                "content": content,
+                "username": shorten(f"{message.author.display_name} (uwu)", 80),
+                "avatar_url": message.author.display_avatar.url,
+                "allowed_mentions": discord.AllowedMentions.none(),
+            }
+            # discord.py expects a real Thread object here; passing thread=None
+            # raises AttributeError before the webhook request is made.
+            if thread is not None:
+                webhook_kwargs["thread"] = thread
+            await webhook.send(**webhook_kwargs)
             delivered = True
-        except discord.HTTPException as error:
+        except (discord.HTTPException, AttributeError, TypeError) as error:
             print(f"BRAX UWU: webhook unavailable in #{channel}; using bot-message fallback: {error}")
 
     if not delivered:
