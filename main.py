@@ -1421,7 +1421,7 @@ def moderation_history_embed(member, page):
         details = [f"Action: {entry.get(chr(97)+chr(99)+chr(116)+chr(105)+chr(111)+chr(110), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}", f"Moderator ID: {entry.get(chr(109)+chr(111)+chr(100)+chr(101)+chr(114)+chr(97)+chr(116)+chr(111)+chr(114)+chr(95)+chr(105)+chr(100), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}", f"Reason: {shorten(entry.get(chr(114)+chr(101)+chr(97)+chr(115)+chr(111)+chr(110), chr(78)+chr(111)+chr(32)+chr(114)+chr(101)+chr(97)+chr(115)+chr(111)+chr(110)), 500)}"]
         if entry.get("duration"): details.append(f"Duration: {entry[chr(100)+chr(117)+chr(114)+chr(97)+chr(116)+chr(105)+chr(111)+chr(110)]}")
         details.append(f"When: {entry.get(chr(116)+chr(105)+chr(109)+chr(101)+chr(115)+chr(116)+chr(97)+chr(109)+chr(112), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}")
-        embed.add_field(name=f"Log {index}", value="\\n".join(details), inline=False)
+        embed.add_field(name=f"Log {index}", value="\n".join(details), inline=False)
     if not entries: embed.description = "No moderation actions have been recorded for this member yet."
     embed.set_footer(text=f"BRAX • Page {page + 1}/{total_pages} • 3 logs per page")
     return embed
