@@ -20,6 +20,7 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1563997203377426623"))
+DEFAULT_MOD_LOG_CHANNEL_ID = 1571301904946831441
 STAFF_ROLE_IDS = {
     int(value.strip())
     for value in os.getenv("STAFF_ROLE_IDS", "").split(",")
@@ -84,11 +85,28 @@ USAGE_ROLE_GRANTER_IDS = {
 role_blacklist_warnings = {}
 BLACKLIST_ASSIGNMENTS_FILE = "blacklist_assignments.json"
 MOD_LOG_CONFIG_FILE = "mod_log_config.json"
+MODERATION_HISTORY_FILE = "moderation_history.json"
 try:
     with open(MOD_LOG_CONFIG_FILE, "r", encoding="utf-8") as file:
         mod_log_channels = json.load(file)
 except (OSError, json.JSONDecodeError):
     mod_log_channels = {}
+
+try:
+    with open(MODERATION_HISTORY_FILE, "r", encoding="utf-8") as file:
+        moderation_history = json.load(file)
+except (OSError, json.JSONDecodeError):
+    moderation_history = {}
+
+def save_moderation_history():
+    with open(MODERATION_HISTORY_FILE, "w", encoding="utf-8") as file:
+        json.dump(moderation_history, file, ensure_ascii=False, indent=2)
+
+def record_moderation_action(target, action, moderator, reason, duration=None):
+    entries = moderation_history.setdefault(str(target.id), [])
+    entries.append({"action": action, "moderator": str(moderator), "moderator_id": moderator.id, "reason": str(reason or "No reason provided"), "duration": duration, "timestamp": discord.utils.utcnow().isoformat()})
+    moderation_history[str(target.id)] = entries[-100:]
+    save_moderation_history()
 
 try:
     with open(BLACKLIST_ASSIGNMENTS_FILE, "r", encoding="utf-8") as file:
@@ -173,7 +191,7 @@ def make_embed(title, description, color):
 
 
 async def send_mod_log(guild, embed):
-    channel_id = mod_log_channels.get(str(guild.id))
+    channel_id = mod_log_channels.get(str(guild.id), DEFAULT_MOD_LOG_CHANNEL_ID)
     if not channel_id:
         print(f"BRAX: No moderation log channel configured for {guild.name}. Use b!mlog in the desired channel.")
         return False
@@ -1378,6 +1396,7 @@ async def moderation_gate(ctx, permission_name):
 
 
 async def send_moderation_result(ctx, action, target, reason, duration=None, color=None):
+    record_moderation_action(target, action, ctx.author, reason, duration)
     embed = discord.Embed(
         title=f"{EMOJIS['confirmed']} {action}",
         color=color or discord.Color.orange(),
@@ -1391,6 +1410,59 @@ async def send_moderation_result(ctx, action, target, reason, duration=None, col
     embed.set_footer(text="BRAX • Moderation")
     await send_mod_log(ctx.guild, embed)
 
+
+def moderation_history_embed(member, page):
+    entries = moderation_history.get(str(member.id), [])
+    total_pages = max(1, (len(entries) + 2) // 3)
+    start = page * 3
+    selected = list(reversed(entries))[start:start + 3]
+    embed = discord.Embed(title=f"Moderation Logs • {member}", description=f"Showing {len(selected)} of {len(entries)} recorded actions.", color=discord.Color.from_rgb(58, 48, 35))
+    for index, entry in enumerate(selected, start=start + 1):
+        details = [f"Action: {entry.get(chr(97)+chr(99)+chr(116)+chr(105)+chr(111)+chr(110), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}", f"Moderator ID: {entry.get(chr(109)+chr(111)+chr(100)+chr(101)+chr(114)+chr(97)+chr(116)+chr(111)+chr(114)+chr(95)+chr(105)+chr(100), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}", f"Reason: {shorten(entry.get(chr(114)+chr(101)+chr(97)+chr(115)+chr(111)+chr(110), chr(78)+chr(111)+chr(32)+chr(114)+chr(101)+chr(97)+chr(115)+chr(111)+chr(110)), 500)}"]
+        if entry.get("duration"): details.append(f"Duration: {entry[chr(100)+chr(117)+chr(114)+chr(97)+chr(116)+chr(105)+chr(111)+chr(110)]}")
+        details.append(f"When: {entry.get(chr(116)+chr(105)+chr(109)+chr(101)+chr(115)+chr(116)+chr(97)+chr(109)+chr(112), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}")
+        embed.add_field(name=f"Log {index}", value="\\n".join(details), inline=False)
+    if not entries: embed.description = "No moderation actions have been recorded for this member yet."
+    embed.set_footer(text=f"BRAX • Page {page + 1}/{total_pages} • 3 logs per page")
+    return embed
+
+class ModerationHistoryView(discord.ui.View):
+    def __init__(self, member, author_id):
+        super().__init__(timeout=180)
+        self.member, self.author_id, self.page = member, author_id, 0
+        self.total_pages = max(1, (len(moderation_history.get(str(member.id), [])) + 2) // 3)
+        self.back_button = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji=discord.PartialEmoji.from_str("<:Backwards:1571304371646632077>"), disabled=True)
+        self.forward_button = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji=discord.PartialEmoji.from_str("<:Forward:1571304228255957133>"), disabled=self.total_pages <= 1)
+        self.back_button.callback = self.go_back
+        self.forward_button.callback = self.go_forward
+        self.add_item(self.back_button)
+        self.add_item(self.forward_button)
+    async def interaction_check(self, interaction):
+        if not is_high_staff(interaction.user):
+            await interaction.response.send_message("You need the brax usage role to view moderation logs.", ephemeral=True)
+            return False
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the person who opened these logs can change pages.", ephemeral=True)
+            return False
+        return True
+    async def update_page(self, interaction):
+        self.back_button.disabled = self.page == 0
+        self.forward_button.disabled = self.page >= self.total_pages - 1
+        await interaction.response.edit_message(embed=moderation_history_embed(self.member, self.page), view=self)
+    async def go_back(self, interaction):
+        self.page = max(0, self.page - 1)
+        await self.update_page(interaction)
+    async def go_forward(self, interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        await self.update_page(interaction)
+
+@bot.command(name="mlogs")
+async def moderation_logs_command(ctx, member: discord.Member):
+    if not is_high_staff(ctx.author):
+        await ctx.reply("You need the brax usage role to view moderation logs.", mention_author=False)
+        return
+    view = ModerationHistoryView(member, ctx.author.id)
+    await ctx.reply(embed=moderation_history_embed(member, 0), view=view, mention_author=False)
 
 @bot.command(name="mlog")
 async def moderation_log_command(ctx, channel: discord.TextChannel = None):
@@ -1790,5 +1862,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: brax-usage-role-access + usageadd + divine-allowlist + paginated-help-menu")
+print("BRAX BUILD: brax-usage-role-access + usageadd + divine-allowlist + paginated-moderation-history + modlog-channel")
 bot.run(TOKEN)
