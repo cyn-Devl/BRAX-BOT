@@ -2240,6 +2240,40 @@ async def usage_add_command(ctx, member: discord.Member):
     )
 
 
+@bot.command(name="lusageadd")
+async def lesser_usage_add_command(ctx, member: discord.Member):
+    if not is_high_staff(ctx.author):
+        await ctx.reply("You need the BRAX Usage role to give Lesser B Usage.", mention_author=False)
+        return
+    role = ctx.guild.get_role(LESSER_BRAX_USAGE_ROLE_ID)
+    if role is None:
+        await ctx.reply("The Lesser B Usage role could not be found. Check the configured role ID.", mention_author=False)
+        return
+    if role >= ctx.guild.me.top_role:
+        await ctx.reply("I can't assign Lesser B Usage because the role is above or equal to my highest role. Move BRAX above it.", mention_author=False)
+        return
+    if role in member.roles:
+        await ctx.reply(f"{member.mention} already has the Lesser B Usage role.", mention_author=False)
+        return
+    try:
+        await member.add_roles(role, reason=f"Lesser B Usage granted by {ctx.author} with b!lusageadd")
+    except discord.Forbidden:
+        await ctx.reply("I can't grant Lesser B Usage. Check my Manage Roles permission and role hierarchy.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"Couldn't grant Lesser B Usage: {error}", mention_author=False)
+        return
+    await ctx.reply(
+        f"{EMOJIS['confirmed']} {ctx.author.mention} gave {member.mention} <@&{LESSER_BRAX_USAGE_ROLE_ID}>.",
+        mention_author=False,
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
+    await log_brax_action(
+        ctx.guild, member, ctx.author, "Lesser B Usage Granted",
+        "Lesser B Usage access granted with b!lusageadd",
+    )
+
+
 @bot.command(name="ticketpanel")
 async def ticket_panel_command(ctx):
     if not is_high_staff(ctx.author):
@@ -2291,7 +2325,8 @@ HELP_PAGES = [
     {
         "title": "<a:Tools:1571303064256909482> Server Tools",
         "description": (
-            "`b!usageadd @user` — Give the brax usage role (Braxton and kaydnn only).\n"
+            "`b!usageadd @user` — Give the brax usage role (Braxton and kaydnn only).
+            `b!lusageadd @user` — Give the Lesser B Usage role (any BRAX Usage member).\n"
             "`b!ticketpanel` — Post the ticket panel.\n"
             "`b!blacklist @user` — Open the blacklist menu.\n"
             "`b!help` — Open this interactive help menu.\n"
@@ -2434,7 +2469,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     )
     embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
     embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
-    embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!help, /help", inline=False)
+    embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!lusageadd @user, b!help, /help", inline=False)
     embed.add_field(name="Fun", value="b!mweute @user (fake mute), b!uwu @user (toggle UWU lock)", inline=False)
     embed.set_footer(text="BRAX • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -2446,5 +2481,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: owner-braxton-uwu + uwu-list + lesser-usage-fun-only + permanent-lesser-role-revoke + five-page-help")
+print("BRAX BUILD: owner-braxton-uwu + uwu-list + lesser-usage-fun-only + permanent-lesser-role-revoke + lesser-usage-grant + five-page-help")
 bot.run(TOKEN)
