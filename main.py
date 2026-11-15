@@ -743,18 +743,10 @@ async def on_message(message):
         try:
             await relay_uwu_message(message)
             print(f"BRAX UWU: relayed message from {member} in #{message.channel}.")
-        except discord.Forbidden:
-            print("BRAX UWU: missing Manage Messages or Manage Webhooks permission.")
-            try:
-                await message.channel.send(
-                    f"**{member.display_name} (uwu):** {uwuify_text(message.content)}",
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                await message.delete()
-            except discord.HTTPException as error:
-                print(f"BRAX UWU: fallback relay failed: {error}")
+        except discord.Forbidden as error:
+            print(f"BRAX UWU: permission failure in #{message.channel}: {error}")
         except discord.HTTPException as error:
-            print(f"BRAX UWU: relay failed: {error}")
+            print(f"BRAX UWU: relay failed in #{message.channel}: {error}")
         return
 
     # Detect another member repeating the same text in the same channel.
@@ -955,7 +947,7 @@ def uwuify_text(value):
     return f"uwu~ {value} >w<" if value else "uwu~"
 
 async def relay_uwu_message(message):
-    """Repost a locked member's message through a clearly labelled UWU webhook."""
+    """Repost a transformed message, preferring a labelled webhook and falling back to BRAX."""
     channel = message.channel
     thread = channel if isinstance(channel, discord.Thread) else None
     webhook_channel = channel.parent if thread else channel
@@ -967,29 +959,41 @@ async def relay_uwu_message(message):
             f"[Embed] {embed.title or ''} {embed.url or ''}".strip()
             for embed in message.embeds
         )
-    content = shorten(content, 2000)
+    content = shorten(content, 1900)
 
+    delivered = False
     if isinstance(webhook_channel, discord.TextChannel):
-        webhook = uwu_webhooks.get(webhook_channel.id)
-        if webhook is None:
-            hooks = await webhook_channel.webhooks()
-            webhook = next((item for item in hooks if item.name == "BRAX UWU Relay"), None)
+        try:
+            webhook = uwu_webhooks.get(webhook_channel.id)
             if webhook is None:
-                webhook = await webhook_channel.create_webhook(name="BRAX UWU Relay")
-            uwu_webhooks[webhook_channel.id] = webhook
-        await webhook.send(
-            content=content,
-            username=shorten(f"{message.author.display_name} (uwu)", 80),
-            avatar_url=message.author.display_avatar.url,
-            thread=thread,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-    else:
+                hooks = await webhook_channel.webhooks()
+                webhook = next((item for item in hooks if item.name == "BRAX UWU Relay"), None)
+                if webhook is None:
+                    webhook = await webhook_channel.create_webhook(name="BRAX UWU Relay")
+                uwu_webhooks[webhook_channel.id] = webhook
+            await webhook.send(
+                content=content,
+                username=shorten(f"{message.author.display_name} (uwu)", 80),
+                avatar_url=message.author.display_avatar.url,
+                thread=thread,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            delivered = True
+        except discord.HTTPException as error:
+            print(f"BRAX UWU: webhook unavailable in #{channel}; using bot-message fallback: {error}")
+
+    if not delivered:
         await channel.send(
             f"**{message.author.display_name} (uwu):** {content}",
             allowed_mentions=discord.AllowedMentions.none(),
         )
-    await message.delete()
+
+    try:
+        await message.delete()
+    except discord.Forbidden:
+        print(f"BRAX UWU: BRAX cannot delete the original message in #{channel}; check channel-specific Manage Messages.")
+    except discord.HTTPException as error:
+        print(f"BRAX UWU: original message deletion failed: {error}")
 
 
 async def send_user_warning(guild, member, text):
