@@ -80,6 +80,26 @@ DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS = {
     1276932593790484636, # bob061344/British guy
 }
 BRAX_USAGE_ROLE_ID = 1571309152440025190
+
+LESSER_BRAX_USAGE_ROLE_ID = 1571343801149296660
+UWU_AUTHORIZED_IDS = {1511412885040009309, 1521469840970350632}
+LESSER_USAGE_STATE_FILE = "lesser_usage_state.json"
+try:
+    with open(LESSER_USAGE_STATE_FILE, "r", encoding="utf-8") as file:
+        lesser_usage_state = json.load(file)
+except (OSError, json.JSONDecodeError):
+    lesser_usage_state = {"strikes": {}, "blocked_users": []}
+
+def save_lesser_usage_state():
+    with open(LESSER_USAGE_STATE_FILE, "w", encoding="utf-8") as file:
+        json.dump(lesser_usage_state, file, ensure_ascii=False, indent=2)
+
+def has_lesser_usage(member):
+    return any(role.id == LESSER_BRAX_USAGE_ROLE_ID for role in getattr(member, "roles", []))
+
+def is_uwu_authorized(member):
+    return getattr(member, "id", None) in UWU_AUTHORIZED_IDS
+
 USAGE_ROLE_GRANTER_IDS = {
     1521469840970350632,  # Braxton
     1511412885040009309,  # kaydnn
@@ -517,6 +537,16 @@ async def on_member_update(before, after):
         role for role in before.roles
         if role.id not in after_ids and role != after.guild.default_role
     ]
+    if any(role.id == LESSER_BRAX_USAGE_ROLE_ID for role in added):
+        if str(after.id) in {str(uid) for uid in lesser_usage_state.get("blocked_users", [])}:
+            lesser_role = after.guild.get_role(LESSER_BRAX_USAGE_ROLE_ID)
+            if lesser_role is not None:
+                try:
+                    await after.remove_roles(lesser_role, reason="BRAX: member permanently lost Lesser B Usage access")
+                    print(f"BRAX: Removed reassigned Lesser B Usage from blocked member {after}.")
+                except discord.HTTPException as error:
+                    print(f"BRAX: Could not remove reassigned Lesser B Usage: {error}")
+
     await handle_blacklisted_role_changes(before, after, added)
 
     had_suggestion = any(
@@ -706,6 +736,44 @@ async def on_message(message):
 
     # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
     member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
+
+    if has_lesser_usage(member) and message.content.startswith("b!"):
+        context = await bot.get_context(message)
+        command_name = context.command.name if context.command else None
+        if command_name not in {"mweute", "help"}:
+            strikes = lesser_usage_state.setdefault("strikes", {})
+            count = int(strikes.get(str(member.id), 0)) + 1
+            strikes[str(member.id)] = count
+            if count == 1:
+                save_lesser_usage_state()
+                await message.channel.send(
+                    f"⚠️ {message.author.mention} You risk your inferior usage being removed. Do you wanna continue your peasant act?",
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+            else:
+                lesser_role = message.guild.get_role(LESSER_BRAX_USAGE_ROLE_ID)
+                if lesser_role is not None and lesser_role in member.roles:
+                    try:
+                        await member.remove_roles(lesser_role, reason="BRAX: second unauthorized command attempt with Lesser B Usage")
+                        blocked = lesser_usage_state.setdefault("blocked_users", [])
+                        if member.id not in blocked:
+                            blocked.append(member.id)
+                        save_lesser_usage_state()
+                        await message.channel.send(
+                            f"🚫 {message.author.mention} has lost Lesser B Usage permanently. Any attempt to give it back will be reversed.",
+                            allowed_mentions=discord.AllowedMentions(users=True),
+                        )
+                        await log_brax_action(message.guild, member, bot.user, "Lesser B Usage Revoked", "Second unauthorized BRAX command attempt; role reassignment is blocked")
+                    except discord.HTTPException as error:
+                        print(f"BRAX: Could not revoke Lesser B Usage from {member}: {error}")
+                        await message.channel.send(f"{EMOJIS['denied']} I couldn't remove the Lesser B role. Check my Manage Roles permission and role hierarchy.")
+                else:
+                    blocked = lesser_usage_state.setdefault("blocked_users", [])
+                    if member.id not in blocked:
+                        blocked.append(member.id)
+                    save_lesser_usage_state()
+            return
+
     if message.channel.id == MEDIA_CHANNEL_ID and member and has_blacklist(member, "Image blacklist"):
         try:
             await message.delete()
@@ -1819,8 +1887,8 @@ async def moderation_logs_command(ctx, member: discord.Member = None):
 
 @bot.command(name="mweute")
 async def fake_mute_command(ctx, member: discord.Member):
-    if not is_high_staff(ctx.author):
-        await ctx.reply(f"{EMOJIS['denied']} You need the BRAX Usage role to use Fun commands.", mention_author=False)
+    if not (is_high_staff(ctx.author) or has_lesser_usage(ctx.author)):
+        await ctx.reply(f"{EMOJIS['denied']} You need a BRAX Usage role to use Fun commands.", mention_author=False)
         return
     if member.id == ctx.author.id or member.bot:
         await ctx.reply(f"{EMOJIS['denied']} Choose another server member.", mention_author=False)
@@ -1837,7 +1905,11 @@ async def fake_mute_command(ctx, member: discord.Member):
 
 @bot.command(name="uwu")
 async def uwu_command(ctx, member: discord.Member):
-    if not await moderation_gate(ctx, "manage_messages"):
+    if not is_uwu_authorized(ctx.author):
+        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner and Braxton can use UWU lock.", mention_author=False)
+        return
+    if not ctx.author.guild_permissions.manage_messages:
+        await ctx.reply(f"{EMOJIS['denied']} You need Manage Messages to use UWU lock.", mention_author=False)
         return
     if not ctx.guild.me.guild_permissions.manage_messages:
         await ctx.reply(f"{EMOJIS['denied']} BRAX needs Manage Messages to replace locked members' original messages.", mention_author=False)
@@ -1861,6 +1933,97 @@ async def uwu_command(ctx, member: discord.Member):
         ctx.guild, member, ctx.author, action,
         "Toggled through b!uwu; message relay uses a labelled BRAX UWU webhook",
     )
+
+
+
+class UwuListView(discord.ui.View):
+    def __init__(self, ctx, locked_members):
+        super().__init__(timeout=180)
+        self.author_id = ctx.author.id
+        self.guild = ctx.guild
+        self.selected_member_id = None
+        options = [
+            discord.SelectOption(label=str(member)[:100], value=str(member.id), description=f"ID: {member.id}")
+            for member in locked_members[:25]
+        ]
+        if options:
+            self.member_select = discord.ui.Select(
+                placeholder="Choose someone to un-UWU",
+                min_values=1,
+                max_values=1,
+                options=options,
+                emoji="🔒",
+            )
+            self.member_select.callback = self.select_member
+            self.add_item(self.member_select)
+            self.remove_button = discord.ui.Button(
+                label="Un-UWU selected",
+                style=discord.ButtonStyle.danger,
+                emoji="🔓",
+            )
+            self.remove_button.callback = self.remove_selected
+            self.add_item(self.remove_button)
+
+    async def interaction_check(self, interaction):
+        if not is_uwu_authorized(interaction.user):
+            await interaction.response.send_message("Only the bot owner and Braxton can manage UWU locks.", ephemeral=True)
+            return False
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the person who opened this list can use its controls.", ephemeral=True)
+            return False
+        return True
+
+    async def select_member(self, interaction):
+        self.selected_member_id = int(self.member_select.values[0])
+        member = self.guild.get_member(self.selected_member_id)
+        await interaction.response.send_message(
+            f"Selected {member.mention if member else self.selected_member_id}. Press Un-UWU selected to remove the lock.",
+            ephemeral=True,
+        )
+
+    async def remove_selected(self, interaction):
+        if self.selected_member_id is None:
+            await interaction.response.send_message("Choose a member first.", ephemeral=True)
+            return
+        key = uwu_lock_key(self.guild.id, self.selected_member_id)
+        if key not in uwu_locks:
+            await interaction.response.send_message("That member is no longer UWU locked.", ephemeral=True)
+            return
+        uwu_locks.pop(key, None)
+        save_uwu_locks()
+        member = self.guild.get_member(self.selected_member_id)
+        await interaction.response.send_message(
+            f"🔓 UWU lock removed from {member.mention if member else self.selected_member_id}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        if member is not None:
+            await log_brax_action(self.guild, member, interaction.user, "UWU Lock Removed", "Removed through b!uwulist")
+        self.stop()
+
+
+@bot.command(name="uwulist")
+async def uwu_list_command(ctx):
+    if not is_uwu_authorized(ctx.author):
+        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner and Braxton can view or manage UWU locks.", mention_author=False)
+        return
+    prefix = f"{ctx.guild.id}:"
+    locked_ids = []
+    for key in uwu_locks:
+        if key.startswith(prefix):
+            try:
+                locked_ids.append(int(key.split(":", 1)[1]))
+            except ValueError:
+                continue
+    locked_members = [member for user_id in locked_ids if (member := ctx.guild.get_member(user_id)) is not None]
+    lines = [f"🔒 {member.mention} — {member.id}" for member in locked_members]
+    embed = discord.Embed(
+        title="🔒 Current UWU Locks",
+        description="\n".join(lines) if lines else "Nobody is currently UWU locked.",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    embed.set_footer(text=f"{len(locked_members)} locked member(s) • Dropdown manages up to 25 at a time")
+    view = UwuListView(ctx, locked_members) if locked_members else None
+    await ctx.reply(embed=embed, view=view, mention_author=False)
 
 
 @bot.command(name="mlog")
@@ -2236,19 +2399,24 @@ class BraxHelpView(discord.ui.View):
 
 @bot.command(name="help")
 async def brax_help_command(ctx):
+    if has_lesser_usage(ctx.author):
+        fun_page = discord.Embed(
+            title="<:Fun:1571324174394200085> Fun",
+            description="b!mweute @user — Fake mute a member for fun. This does not apply a real timeout.",
+            color=discord.Color.from_rgb(58, 48, 35),
+        )
+        fun_page.set_footer(text="BRAX • Lesser B Usage • Fun Only")
+        await ctx.reply(embed=fun_page, mention_author=False)
+        return
     if not is_high_staff(ctx.author):
         await ctx.reply(
             f"{EMOJIS['denied']} You don't have permission to use BRAX commands. "
-            "You need the BRAX Usage role.",
+            "You need a BRAX Usage role.",
             mention_author=False,
         )
         return
     view = BraxHelpView(ctx.author.id)
-    await ctx.reply(
-        embed=make_help_embed(0),
-        view=view,
-        mention_author=False,
-    )
+    await ctx.reply(embed=make_help_embed(0), view=view, mention_author=False)
 
 
 @bot.tree.command(name="help", description="Show BRAX commands for BRAX Usage role members.")
@@ -2278,5 +2446,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: fun-commands + uwu-lock + full-action-history + blacklist-history + five-page-help")
+print("BRAX BUILD: owner-braxton-uwu + uwu-list + lesser-usage-fun-only + permanent-lesser-role-revoke + five-page-help")
 bot.run(TOKEN)
