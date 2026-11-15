@@ -806,7 +806,15 @@ async def on_member_update(before, after):
         if role.id == BLACKLIST_ROLES["Divine punishment"]:
             allowed_to_remove = actor_id in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS
         else:
-            allowed_to_remove = assigned_by is not None and actor_id == assigned_by
+            temporary_key = f"{after.guild.id}:{after.id}:{role.id}"
+            temporary_entry = economy_data.setdefault("temporary_blacklists", {}).get(temporary_key)
+            expired_temporary = temporary_entry is not None and float(temporary_entry.get("expires_at", 0)) <= time.time()
+            bot_expiry_action = temporary_entry is not None and actor_id == getattr(bot.user, "id", None)
+            allowed_to_remove = (
+                (assigned_by is not None and actor_id == assigned_by)
+                or expired_temporary
+                or bot_expiry_action
+            )
 
         if not allowed_to_remove:
             try:
