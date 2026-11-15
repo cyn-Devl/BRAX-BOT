@@ -3222,9 +3222,15 @@ async def coinflip_command(ctx, side: str, amount: int):
         return
     result = random.choice(["heads", "tails"])
     won = side[0] == result[0]
+    payout_reduction = 0.95 if coin_balance(ctx.guild.id, ctx.author.id) >= 100_000 else (0.40 if coin_balance(ctx.guild.id, ctx.author.id) >= 1_000 else 0.0)
     if won:
-        add_coins(ctx.guild.id, ctx.author.id, amount * 2)
-    await ctx.reply(f"{COINFLIP_EMOJI} **{result.title()}!** " + (f"You won {amount} coins." if won else f"You lost {amount} coins.") + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
+        gross_payout = amount * 2
+        payout = int(gross_payout * (1 - payout_reduction))
+        add_coins(ctx.guild.id, ctx.author.id, payout)
+    else:
+        payout = 0
+    reduction_note = f" Your payout was reduced by {payout_reduction * 100:.0f}% due to your wallet tier." if payout_reduction else ""
+    await ctx.reply(f"{COINFLIP_EMOJI} **{result.title()}!** " + (f"You won {payout:,} coins." if won else f"You lost {amount:,} coins.") + reduction_note + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
 
 @bot.command(name="gamble")
 async def gamble_command(ctx, amount: int, multiplier: int = 2):
@@ -3273,8 +3279,12 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
     luck = max(1, int(economy_data.setdefault('gamble_luck', {}).get(economy_key(ctx.guild.id, ctx.author.id), 1)))
     won = random.randrange(multiplier) < luck
     set_coin_balance(ctx.guild.id, ctx.author.id, balance - amount)
+    payout_reduction = 0.95 if balance >= 100_000 else (0.40 if balance >= 1_000 else 0.0)
+    payout = 0
     if won:
-        add_coins(ctx.guild.id, ctx.author.id, amount * multiplier)
+        gross_payout = amount * multiplier
+        payout = int(gross_payout * (1 - payout_reduction))
+        add_coins(ctx.guild.id, ctx.author.id, payout)
     new_balance = coin_balance(ctx.guild.id, ctx.author.id)
     if new_balance < 0:
         debt_key = economy_key(ctx.guild.id, ctx.author.id)
@@ -3306,8 +3316,10 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
     else:
         balance_text = f"{new_balance:,}"
     amount_text = f"{amount:,}" if len(str(amount)) <= 30 else f"{str(amount)[:8]}… ({len(str(amount))} digits)"
+    payout_note = f" Your payout was reduced by {payout_reduction * 100:.0f}% for your wallet tier (received {payout:,} coins)." if won and payout_reduction else (f" You received {payout:,} coins." if won else "")
     result_text = (
         (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount_text}** coin bet at **{multiplier}x**.")
+        + payout_note
         + f" Balance: **{balance_text}** {BRAX_COINS_EMOJI}.{debt_note}"
     )
     await ctx.reply(result_text[:1900], mention_author=False)
@@ -4194,7 +4206,7 @@ GAMBLING_HELP_PAGE = {
         "`b!gamble <amount> <2-30>` — Bet any positive amount of BRAX Coins at a 2x–30x multiplier. "
         "Bets above 10x can put your balance into debt.\n"
         "Example: `b!gamble 100 15`\n\n"
-        "You have a 1-in-the-multiplier chance to win. A win pays the bet multiplied by your selected multiplier; a loss deducts the bet."
+        "You have a 1-in-the-multiplier chance to win. Winning payouts are reduced by 40% when your wallet is at least 1,000 coins, and by 95% at 100,000 coins or more. A loss deducts the bet."
     ),
     "footer": "BRAX • Gambling",
 }
