@@ -866,7 +866,7 @@ async def on_message(message):
     if has_lesser_usage(member) and message.content.startswith("b!"):
         context = await bot.get_context(message)
         command_name = context.command.name if context.command else None
-        if command_name not in {"mweute", "help", "gamble"}:
+        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel"}:
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
             strikes[str(member.id)] = count
@@ -1418,7 +1418,7 @@ class BlacklistSelect(discord.ui.Select):
         if is_divine:
             if not is_divine_authorized:
                 await interaction.response.send_message(
-                    "Only the six specifically authorized users can assign or remove Divine punishment.",
+                    "Only the seven specifically authorized users can assign or remove Divine punishment.",
                     ephemeral=True,
                 )
                 return
@@ -2058,7 +2058,7 @@ async def fake_mute_command(ctx, member: discord.Member):
 @bot.command(name="uwu")
 async def uwu_command(ctx, member: discord.Member):
     if not is_uwu_authorized(ctx.author):
-        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner and Braxton can use UWU lock.", mention_author=False)
+        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner, Braxton, and ch33zee can use UWU lock.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_messages:
         await ctx.reply(f"{EMOJIS['denied']} You need Manage Messages to use UWU lock.", mention_author=False)
@@ -2886,14 +2886,15 @@ HELP_PAGES = [
             "to members with <@&1571309152440025190> (**brax usage**). Old staff-role names "
             "and IDs no longer grant command access.\n\n"
             "**Special authorization**\n"
-            "The six people listed below are specifically allowed to assign or remove "
+            "The seven people listed below are specifically allowed to assign or remove "
             "the Divine punishment role:\n"
             "• noobidbody — `781537035428429866`\n"
             "• eyeless — `942862192867409941`\n"
             "• <:Brax:1571324199765549219> Braxton — `1521469840970350632`\n"
             "• <:Kaydn:1571324228127690954> kaydnn — `1511412885040009309`\n"
             "• theimpostorsyndrome/testo — `1369381936283389983`\n"
-            "• bob061344/British guy — `1276932593790484636`\n\n"
+            "• bob061344/British guy — `1276932593790484636`\n"
+            "• Additional authorized user — `718619652187750411`\n\n"
             "Members with brax usage can use regular blacklist controls but cannot use "
             "Divine punishment unless their user ID is separately on the authorization list. "
             "The six authorized accounts can open the blacklist menu for Divine punishment only. "
@@ -2948,7 +2949,10 @@ HELP_PAGES = [
             "`b!buy` — Purchase store items.\n"
             "`b!coinflip heads|tails <amount>` and `b!gamble <amount> <2-30>` — Play coin games.\n"
             "`b!coinlb` — View the BRAX Coin leaderboard. `b!coinadd @user <amount>` — Add coins (Braxton only).\n"
-            "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n\n"
+            "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n"
+            "`b!mine` — Dig for Mick & Rorty materials and collectibles. `b!inventory` — View your finds.\n"
+            "`b!sell <item> [amount]` — Sell finds for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
+            "Inside a trade: `b!offercoins`, `b!offeritem`, `b!tradeconfirm`, `b!tradecancel`.\n\n"
             "UWU lock requires BRAX Usage and Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
         ),
