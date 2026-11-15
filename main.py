@@ -2877,7 +2877,7 @@ async def trade_view_command(ctx):
         lines.append("")
     confirmed=trade.get("confirmed",[])
     lines.append(f"Confirmations: **{len(confirmed)}/2**")
-    await ctx.reply(embed=discord.Embed(title="🤝 Current Trade Offers",description="\\n".join(lines),color=discord.Color.from_rgb(58,48,35)),mention_author=False)
+    await ctx.reply(embed=discord.Embed(title="🤝 Current Trade Offers",description="\n".join(lines),color=discord.Color.from_rgb(58,48,35)),mention_author=False)
 
 @bot.command(name="tradeconfirm")
 async def trade_confirm_command(ctx):
