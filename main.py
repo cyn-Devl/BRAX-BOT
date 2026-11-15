@@ -2520,6 +2520,24 @@ async def buy_command(ctx, item: str, *, details: str = ""):
     )
     await ctx.reply("Your request was sent to staff. Coins are held pending review.", mention_author=False)
 
+@bot.command(name="coinadd")
+async def coinadd_command(ctx, member: discord.Member, amount: int):
+    # Only Braxton's Discord account may use this economy-admin command.
+    if ctx.author.id != 1521469840970350632:
+        await ctx.reply("You aren't authorized to use this command.", mention_author=False)
+        return
+    if amount <= 0:
+        await ctx.reply("Amount must be a positive whole number.", mention_author=False)
+        return
+    add_coins(ctx.guild.id, member.id, amount)
+    new_balance = coin_balance(ctx.guild.id, member.id)
+    await ctx.reply(
+        f"{EMOJIS['confirmed']} Added **{amount:,}** {BRAX_COINS_EMOJI} to {member.mention}. "
+        f"Their new balance is **{new_balance:,}** {BRAX_COINS_EMOJI}.",
+        mention_author=False,
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
+
 @bot.command(name="coinflip", aliases=["flip"])
 async def coinflip_command(ctx, side: str, amount: int):
     side = side.casefold()
@@ -2580,7 +2598,7 @@ async def coin_leaderboard_command(ctx):
         rows.append(f"**{rank}.** {name} — **{balance:,}** {BRAX_COINS_EMOJI}")
     embed = discord.Embed(
         title=f"{BRAX_COINS_EMOJI} BRAX Coin Leaderboard",
-        description="\\n".join(rows),
+        description="\n".join(rows),
         color=discord.Color.from_rgb(58, 48, 35),
     )
     await ctx.reply(embed=embed, mention_author=False)
@@ -2604,9 +2622,9 @@ async def stocks_command(ctx):
     prices = stock_prices()
     key = economy_key(ctx.guild.id, ctx.author.id)
     holdings = economy_data.setdefault("stocks", {}).get(key, {})
-    quotes = "\\n".join(f"**{symbol}** — {price} {BRAX_COINS_EMOJI}" for symbol, price in prices.items())
+    quotes = "\n".join(f"**{symbol}** — {price} {BRAX_COINS_EMOJI}" for symbol, price in prices.items())
     portfolio = ", ".join(f"{symbol} × {count}" for symbol, count in holdings.items() if count) or "No shares yet."
-    embed = discord.Embed(title="📈 BRAX Market", description=f"{quotes}\\n\\n**Your shares:** {portfolio}\\nBuy: b!stockbuy BRAX 2\\nSell: b!stocksell BRAX 1", color=discord.Color.from_rgb(58, 48, 35))
+    embed = discord.Embed(title="📈 BRAX Market", description=f"{quotes}\n\n**Your shares:** {portfolio}\nBuy: b!stockbuy BRAX 2\nSell: b!stocksell BRAX 1", color=discord.Color.from_rgb(58, 48, 35))
     await ctx.reply(embed=embed, mention_author=False)
 
 @bot.command(name="stockbuy")
@@ -2716,7 +2734,7 @@ HELP_PAGES = [
             "`b!balance [@user]` — Check coins. `b!shop` / `b!store` — View the store. "
             "`b!buy` — Purchase store items.\n"
             "`b!coinflip heads|tails <amount>` and `b!gamble <amount> <2-30>` — Play coin games.\n"
-            "`b!coinlb` — View the BRAX Coin leaderboard.\n"
+            "`b!coinlb` — View the BRAX Coin leaderboard. `b!coinadd @user <amount>` — Add coins (Braxton only).\n"
             "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n\n"
             "UWU lock requires BRAX Usage and Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
