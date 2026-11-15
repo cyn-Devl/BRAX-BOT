@@ -2819,13 +2819,14 @@ async def brax_help_command(ctx):
     view = BraxHelpView(ctx.author.id)
     await ctx.reply(embed=make_help_embed(0), view=view, mention_author=False)
 
-@bot.tree.command(name="help", description="Show BRAX commands for BRAX Usage role members.")
+@bot.tree.command(name="help", description="Show BRAX help and public gambling commands.")
 async def brax_slash_help_command(interaction: discord.Interaction):
+    if has_lesser_usage(interaction.user):
+        view = BraxHelpView(interaction.user.id, pages=LESSER_HELP_PAGES)
+        await interaction.response.send_message(embed=make_help_embed(0, LESSER_HELP_PAGES), view=view, ephemeral=True)
+        return
     if not is_high_staff(interaction.user):
-        await interaction.response.send_message(
-            "You need the BRAX Usage role to use BRAX commands.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(embed=make_help_embed(0, [GAMBLING_HELP_PAGE]), ephemeral=True)
         return
     embed = discord.Embed(
         title="BRAX Commands",
@@ -2838,7 +2839,6 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     embed.add_field(name="Fun & Economy", value="b!mweute, b!uwu, b!balance, b!shop, b!store, b!buy, b!coinflip, b!gamble (2x–30x), b!coinlb, b!stocks", inline=False)
     embed.set_footer(text="BRAX • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 
 if not TOKEN:
     raise RuntimeError(
