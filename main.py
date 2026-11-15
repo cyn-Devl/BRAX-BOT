@@ -737,6 +737,33 @@ async def on_ready():
     print(f"Logged in as: {bot.user} ({bot.user.id})")
     print(f"Logging channel ID: {LOG_CHANNEL_ID}")
     print(f"Connected guilds: {len(bot.guilds)}")
+
+    # One-time TBR reset: clear every server member's BRAX points and tokens.
+    reset_marker = "tbr_points_tokens_reset_20261115"
+    if not economy_data.get(reset_marker):
+        economy_data.setdefault("balances", {}).clear()
+        economy_data.setdefault("tokens", {}).clear()
+        save_economy()
+
+        general_channel = bot.get_channel(GENERAL_CHANNEL_ID)
+        if general_channel is None:
+            try:
+                general_channel = await bot.fetch_channel(GENERAL_CHANNEL_ID)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as error:
+                print(f"BRAX TBR reset announcement channel unavailable: {error}")
+
+        if general_channel is not None:
+            try:
+                await general_channel.send(
+                    "Tbr - Hey we've noticed yalls fuckary with our points so we reset everything (points and tokens)"
+                )
+                economy_data[reset_marker] = True
+                save_economy()
+                print("BRAX: TBR points-and-tokens reset completed and announced.")
+            except discord.HTTPException as error:
+                print(f"BRAX TBR reset announcement failed: {error}")
+        else:
+            print("BRAX: TBR points-and-tokens reset applied; announcement will retry when General is available.")
     print(f"Message Content Intent enabled: {bot.intents.message_content}")
     for guild in bot.guilds:
         me = guild.me
