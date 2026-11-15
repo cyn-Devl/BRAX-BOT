@@ -78,11 +78,12 @@ DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS = {
     1511412885040009309, # kaydnn
     1369381936283389983, # theimpostorsyndrome/testo
     1276932593790484636, # bob061344/British guy
+    718619652187750411, # additional Divine punishment authorization
 }
 BRAX_USAGE_ROLE_ID = 1571309152440025190
 
 LESSER_BRAX_USAGE_ROLE_ID = 1571343801149296660
-UWU_AUTHORIZED_IDS = {1511412885040009309, 1521469840970350632}
+UWU_AUTHORIZED_IDS = {1511412885040009309, 1521469840970350632, 1011740267453366434}  # ch33zee
 
 BRAX_COINS_EMOJI = "<:Braxcoins:1571355479278485624>"
 COINFLIP_EMOJI = "<a:Coinflip:1571355371086422166>"
@@ -93,6 +94,10 @@ try:
         economy_data = json.load(file)
 except (OSError, json.JSONDecodeError):
     economy_data = {"balances": {}, "message_counts": {}, "stocks": {}}
+
+economy_data.setdefault("inventories", {})
+economy_data.setdefault("mine_cooldowns", {})
+economy_data.setdefault("trades", {})
 
 def save_economy():
     with open(ECONOMY_FILE, "w", encoding="utf-8") as file:
@@ -117,6 +122,69 @@ def spend_coins(guild_id, user_id, amount):
         return False
     set_coin_balance(guild_id, user_id, balance - amount)
     return True
+
+
+MINING_LOOT = [
+    ("Dirt",1,260),("Scrap Metal",4,150),("Circuit Scrap",7,95),("Copper Ore",5,110),
+    ("Glass Shard",3,100),("Glow Moss",4,85),("Amber Resin",8,70),("Obsidian",10,55),
+    ("Toxic Sludge",6,65),("Sugar Quartz",5,70),("Sulfur",4,75),("Gunpowder",6,50),
+    ("GlowCap",5,60),("Blossom Petal",3,65),("Gear Bits",5,90),("Wool Tuft",3,60),
+    ("Spider Silk",8,45),("Desert Rose",7,42),("Living Coral",9,35),("Frost Fur",8,35),
+    ("Dino Hide",9,32),("Squid Ink",6,40),("Glow Plankton",6,45),("Snake Venom",11,24),
+    ("Raptor Claw",12,24),("Silver Ore",12,28),("Cryo Crystal",14,22),("Magma Core",18,18),
+    ("Emerald Shard",20,16),("Golden Nugget",25,12),("Sea Pearl",22,12),("Moon",30,9),
+    ("Portal Fluid",35,8),("Flux Crystal",45,7),("Wriggly Worm",4,42),("Crystal Ant",8,18),
+    ("Frog Legs",6,22),("Crab Claw",9,18),("Black Truffle",18,8),("Saffron",20,7),
+    ("Dragon Pepper",24,6),("Ancient Spice",30,4),("Golden Honey",28,5),("Phoenix Egg",90,1),
+    ("Raw Fish",5,25),("Magma Crab",32,4),("Storm Eel",38,3),("Void Tentacle",55,2),
+    ("Rock Grub",7,20),("Thorn Beetle",16,7),("Moon Cheese",26,5),("Gumdrop",4,25),
+    ("Lollipop",5,20),("Candy Cane",7,14),("Almond Water",25,5),("Thorn Resin",35,4),
+    ("Wisp Essence",50,2),("Meteor Iron",55,2),("Quantum Dust",60,2),("Ancient Alloy",65,1),
+    ("Void Essence",75,1),("Relic Gear",80,1),("Phoenix Feather",95,1),("Chrono Crystal",100,1),
+    ("Dark Matter",120,1),("Singularity Shard",150,1),
+]
+MINING_ITEM_LOOKUP = {name.casefold(): name for name, _, _ in MINING_LOOT}
+MINING_ITEM_VALUES = {name: value for name, value, _ in MINING_LOOT}
+MINING_COOLDOWN_SECONDS = 30
+TRADE_CATEGORY_ID = 1571397522289729686
+
+def inventory_key(guild_id, user_id):
+    return economy_key(guild_id, user_id)
+
+def get_inventory(guild_id, user_id):
+    return economy_data.setdefault("inventories", {}).setdefault(inventory_key(guild_id, user_id), {})
+
+def add_item(guild_id, user_id, item, amount):
+    inventory = get_inventory(guild_id, user_id)
+    inventory[item] = int(inventory.get(item, 0)) + int(amount)
+    if inventory[item] <= 0:
+        inventory.pop(item, None)
+    save_economy()
+
+def normalize_mining_item(value):
+    return MINING_ITEM_LOOKUP.get(" ".join(str(value).casefold().split()))
+
+def active_trade_for_channel(channel_id):
+    for trade in economy_data.setdefault("trades", {}).values():
+        if int(trade.get("channel_id", 0)) == int(channel_id):
+            return trade
+    return None
+
+def trade_offer_for(trade, user_id):
+    return trade.setdefault("offers", {}).setdefault(str(user_id), {"coins": 0, "items": {}})
+
+def trade_member_ids(trade):
+    return [int(value) for value in trade.get("user_ids", [])]
+
+def refund_trade(guild_id, trade):
+    for user_id in trade_member_ids(trade):
+        offer = trade_offer_for(trade, user_id)
+        coins = int(offer.get("coins", 0))
+        if coins > 0:
+            add_coins(guild_id, user_id, coins)
+        for item, amount in offer.get("items", {}).items():
+            if int(amount) > 0:
+                add_item(guild_id, user_id, item, int(amount))
 
 def award_message_coin(message):
     key = economy_key(message.guild.id, message.author.id)
@@ -2665,6 +2733,151 @@ async def stocksell_command(ctx, symbol: str, shares: int):
 
 
 
+
+@bot.command(name="mine")
+async def mine_command(ctx):
+    key=economy_key(ctx.guild.id,ctx.author.id); now=time.time()
+    cooldowns=economy_data.setdefault("mine_cooldowns",{}); ready=float(cooldowns.get(key,0))
+    if now<ready:
+        await ctx.reply(f"Your digging tools need a moment. Try again in **{max(1,int(ready-now+0.999))}s**.",mention_author=False); return
+    cooldowns[key]=now+MINING_COOLDOWN_SECONDS
+    found=[]
+    for _ in range(random.choices([1,2,3],weights=[65,28,7],k=1)[0]):
+        name,_,_=random.choices(MINING_LOOT,weights=[entry[2] for entry in MINING_LOOT],k=1)[0]
+        found.append(name); add_item(ctx.guild.id,ctx.author.id,name,1)
+    save_economy()
+    await ctx.reply("⛏️ **You finished digging!**\n"+"\n".join(f"• **{name}**" for name in found)+"\n\nCheck finds with b!inventory. Sell with b!sell <item>.",mention_author=False)
+
+@bot.command(name="inventory",aliases=["inv","backpack","bag"])
+async def inventory_command(ctx,member:discord.Member=None):
+    member=member or ctx.author; inventory=get_inventory(ctx.guild.id,member.id)
+    entries=sorted([(name,int(amount)) for name,amount in inventory.items() if int(amount)>0],key=lambda entry:entry[0].casefold())
+    description="\n".join(f"**{name}** × {amount}" for name,amount in entries) if entries else "No items yet. Use b!mine to start digging."
+    embed=discord.Embed(title=f"🎒 {member.display_name}'s Inventory",description=shorten(description,4000),color=discord.Color.from_rgb(58,48,35))
+    embed.set_footer(text=f"{len(entries)} different item types • Sell with b!sell <item>")
+    await ctx.reply(embed=embed,mention_author=False)
+
+@bot.command(name="sell")
+async def sell_command(ctx,*,item_and_amount:str):
+    parts=item_and_amount.strip().rsplit(" ",1); amount=None; item_text=item_and_amount.strip()
+    if len(parts)==2 and parts[1].isdigit(): item_text,amount=parts[0],int(parts[1])
+    item=normalize_mining_item(item_text)
+    if item is None:
+        await ctx.reply("I don't recognize that item. Check b!inventory for exact names.",mention_author=False); return
+    inventory=get_inventory(ctx.guild.id,ctx.author.id); owned=int(inventory.get(item,0)); quantity=owned if amount is None else amount
+    if quantity<1 or owned<quantity:
+        await ctx.reply(f"You only have **{owned} {item}**.",mention_author=False); return
+    inventory[item]=owned-quantity
+    if inventory[item]<=0: inventory.pop(item,None)
+    proceeds=MINING_ITEM_VALUES[item]*quantity; add_coins(ctx.guild.id,ctx.author.id,proceeds); save_economy()
+    await ctx.reply(f"💰 Sold **{quantity} {item}** for **{proceeds:,}** {BRAX_COINS_EMOJI}. New balance: **{coin_balance(ctx.guild.id,ctx.author.id):,}**.",mention_author=False)
+
+@bot.command(name="trade")
+async def trade_command(ctx,member:discord.Member):
+    if member.bot or member.id==ctx.author.id:
+        await ctx.reply("Choose another human member to trade with.",mention_author=False); return
+    if not ctx.guild.me.guild_permissions.manage_channels:
+        await ctx.reply("I need Manage Channels permission to open a private trade channel.",mention_author=False); return
+    for active in economy_data.setdefault("trades",{}).values():
+        if ctx.author.id in trade_member_ids(active) or member.id in trade_member_ids(active):
+            await ctx.reply("One of you already has an active trade. Finish or cancel it first.",mention_author=False); return
+    category=ctx.guild.get_channel(TRADE_CATEGORY_ID)
+    if not isinstance(category,discord.CategoryChannel):
+        await ctx.reply("I couldn't find the configured trade category. Check the category ID.",mention_author=False); return
+    overwrites={
+        ctx.guild.default_role:discord.PermissionOverwrite(view_channel=False),
+        ctx.author:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),
+        member:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True),
+        ctx.guild.me:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,manage_channels=True),
+    }
+    try:
+        channel=await ctx.guild.create_text_channel(name=f"trade-{ctx.author.name[:12]}-{member.name[:12]}".lower(),category=category,overwrites=overwrites,topic=f"Private BRAX trade between {ctx.author.id} and {member.id}",reason="BRAX player trade")
+    except discord.HTTPException as error:
+        print(f"BRAX: Could not create trade channel: {error}")
+        await ctx.reply("I couldn't create the trade channel. Check Manage Channels permission and category access.",mention_author=False); return
+    economy_data.setdefault("trades",{})[str(channel.id)]={
+        "guild_id":ctx.guild.id,"channel_id":channel.id,"user_ids":[ctx.author.id,member.id],
+        "offers":{str(ctx.author.id):{"coins":0,"items":{}},str(member.id):{"coins":0,"items":{}}},"confirmed":[],
+    }
+    save_economy()
+    await channel.send(
+        f"{ctx.author.mention} {member.mention} — your private trade is open.\n\n"
+        "b!offercoins <amount> — Add BRAX Coins to your offer.\n"
+        "b!offeritem <amount> <item name> — Add items, e.g. b!offeritem 2 Scrap Metal.\n"
+        "b!tradeconfirm — Lock your offer. Both people must confirm to complete.\n"
+        "b!tradecancel — Cancel and return all offered items and coins.\n\n"
+        "Check b!inventory and b!balance. Offers are held until completion or cancellation.",
+        allowed_mentions=discord.AllowedMentions(users=True,roles=False,everyone=False))
+    await ctx.reply(f"Created your private trade channel: {channel.mention}",mention_author=False)
+
+@bot.command(name="offercoins")
+async def trade_offer_coins_command(ctx,amount:int):
+    trade=active_trade_for_channel(ctx.channel.id)
+    if trade is None or ctx.author.id not in trade_member_ids(trade):
+        await ctx.reply("Use this command inside your active trade channel.",mention_author=False); return
+    if amount<0:
+        await ctx.reply("Offer amount must be zero or more.",mention_author=False); return
+    offer=trade_offer_for(trade,ctx.author.id); old=int(offer.get("coins",0))
+    if old: add_coins(ctx.guild.id,ctx.author.id,old)
+    if amount and not spend_coins(ctx.guild.id,ctx.author.id,amount):
+        if old: spend_coins(ctx.guild.id,ctx.author.id,old)
+        await ctx.reply("You don't have enough BRAX Coins for that offer.",mention_author=False); return
+    offer["coins"]=amount; trade["confirmed"]=[]; save_economy()
+    await ctx.reply(f"Your coin offer is now **{amount:,}** {BRAX_COINS_EMOJI}. Both traders must confirm again.",mention_author=False)
+
+@bot.command(name="offeritem")
+async def trade_offer_item_command(ctx,amount:int,*,item_name:str):
+    trade=active_trade_for_channel(ctx.channel.id)
+    if trade is None or ctx.author.id not in trade_member_ids(trade):
+        await ctx.reply("Use this command inside your active trade channel.",mention_author=False); return
+    item=normalize_mining_item(item_name)
+    if item is None or amount<1:
+        await ctx.reply("Use b!offeritem <amount> <item name> with an item from b!inventory.",mention_author=False); return
+    inventory=get_inventory(ctx.guild.id,ctx.author.id); offer=trade_offer_for(trade,ctx.author.id)
+    current=int(offer.setdefault("items",{}).get(item,0))
+    if current:
+        add_item(ctx.guild.id,ctx.author.id,item,current); inventory=get_inventory(ctx.guild.id,ctx.author.id)
+        offer["items"].pop(item,None)
+    if int(inventory.get(item,0))<amount:
+        await ctx.reply(f"You don't have **{amount} {item}** available.",mention_author=False); return
+    inventory[item]=int(inventory.get(item,0))-amount
+    if inventory[item]<=0: inventory.pop(item,None)
+    offer["items"][item]=amount; trade["confirmed"]=[]; save_economy()
+    await ctx.reply(f"Added **{amount} {item}** to your offer. Both traders must confirm again.",mention_author=False)
+
+@bot.command(name="tradeconfirm")
+async def trade_confirm_command(ctx):
+    trade=active_trade_for_channel(ctx.channel.id)
+    if trade is None or ctx.author.id not in trade_member_ids(trade):
+        await ctx.reply("This isn't one of your active trade channels.",mention_author=False); return
+    confirmed=trade.setdefault("confirmed",[])
+    if ctx.author.id not in confirmed: confirmed.append(ctx.author.id)
+    save_economy()
+    if any(uid not in confirmed for uid in trade_member_ids(trade)):
+        await ctx.reply("Your offer is locked. Waiting for the other trader to use b!tradeconfirm.",mention_author=False); return
+    guild_id=ctx.guild.id; ids=trade_member_ids(trade)
+    offer_a,offer_b=trade_offer_for(trade,ids[0]),trade_offer_for(trade,ids[1])
+    add_coins(guild_id,ids[0],int(offer_b.get("coins",0))); add_coins(guild_id,ids[1],int(offer_a.get("coins",0)))
+    for item,count in offer_b.get("items",{}).items(): add_item(guild_id,ids[0],item,int(count))
+    for item,count in offer_a.get("items",{}).items(): add_item(guild_id,ids[1],item,int(count))
+    economy_data.setdefault("trades",{}).pop(str(ctx.channel.id),None); save_economy()
+    await ctx.send("✅ **TRADE COMPLETE!** Both offers have been exchanged. This channel will now close.")
+    await asyncio.sleep(5)
+    try: await ctx.channel.delete(reason="BRAX trade completed")
+    except discord.HTTPException as error: print(f"BRAX: Could not delete completed trade channel: {error}")
+
+@bot.command(name="tradecancel")
+async def trade_cancel_command(ctx):
+    trade=active_trade_for_channel(ctx.channel.id)
+    if trade is None or ctx.author.id not in trade_member_ids(trade):
+        await ctx.reply("This isn't one of your active trade channels.",mention_author=False); return
+    refund_trade(ctx.guild.id,trade); economy_data.setdefault("trades",{}).pop(str(ctx.channel.id),None); save_economy()
+    await ctx.send("Trade cancelled. All offered BRAX Coins and items have been returned. This channel will close.")
+    await asyncio.sleep(5)
+    try: await ctx.channel.delete(reason="BRAX trade cancelled")
+    except discord.HTTPException as error: print(f"BRAX: Could not delete cancelled trade channel: {error}")
+
+
 HELP_PAGES = [
     {
         "title": "BRAX • Command Access",
@@ -2864,5 +3077,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: economy-uwu-upgrade-2026-11-14 | coins-per-10-messages | shop | coinflip | gamble-30x-debt | coin-leaderboard | stocks | custom-role | advanced-uwu | full-moderation")
+print("BRAX BUILD: mining-trading-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation")
 bot.run(TOKEN)
