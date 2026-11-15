@@ -693,12 +693,12 @@ async def tbr_tax_loop():
             collected = tokens_collected = taxed_members = 0
             channel = guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID)
 
-            for account_key, raw_balance in list(balances.items()):
+            for account_key in list(set(balances) | set(tokens_data)):
                 if not account_key.startswith(f"{guild.id}:"):
                     continue
                 try:
                     user_id = int(account_key.split(":", 1)[1])
-                    wallet = max(0, int(raw_balance))
+                    wallet = max(0, int(balances.get(account_key, 0)))
                     tokens = token_balance(guild.id, user_id)
                 except (ValueError, TypeError):
                     continue
