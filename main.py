@@ -232,15 +232,6 @@ def refund_trade(guild_id, trade):
                 add_item(guild_id, user_id, item, int(amount))
 
 
-@bot.event
-async def on_guild_channel_delete(channel):
-    trade = active_trade_for_channel(channel.id)
-    if trade is not None:
-        refund_trade(channel.guild.id, trade)
-        economy_data.setdefault("trades", {}).pop(str(channel.id), None)
-        save_economy()
-        print(f"BRAX: Refunded and cleared trade {channel.id} after its channel was deleted.")
-
 def award_message_coin(message):
     key = economy_key(message.guild.id, message.author.id)
     counts = economy_data.setdefault("message_counts", {})
@@ -361,6 +352,50 @@ intents.members = True
 intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="b!", intents=intents, help_command=None)
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    trade = active_trade_for_channel(channel.id)
+    if trade is not None:
+        refund_trade(channel.guild.id, trade)
+        economy_data.setdefault("trades", {}).pop(str(channel.id), None)
+        save_economy()
+        print(f"BRAX: Refunded and cleared trade {channel.id} after its channel was deleted.")
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        # Unknown commands such as b!daily are ignored instead of flooding logs.
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.reply(
+            "That argument is invalid. Amounts must be whole numbers (no decimals). "
+            "Check the command format with b!help.",
+            mention_author=False,
+        )
+        return
+    if isinstance(error, commands.MissingRequiredArgument):
+        signature = ctx.command.signature if ctx.command else ""
+        await ctx.reply(
+            f"Missing an argument. Usage: `b!{ctx.command.qualified_name} {signature}`",
+            mention_author=False,
+        )
+        return
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.reply(
+            f"Please wait {error.retry_after:.1f} seconds before using that command again.",
+            mention_author=False,
+        )
+        return
+    if isinstance(error, (commands.CheckFailure, commands.DisabledCommand)):
+        return
+    if isinstance(error, commands.CommandInvokeError):
+        print(f"BRAX COMMAND ERROR in {ctx.command}: {error.original!r}")
+        return
+    print(f"BRAX COMMAND ERROR: {error!r}")
+
+
 
 # In-memory only: message contents are not persisted across restarts.
 message_cache = OrderedDict()
