@@ -3594,47 +3594,78 @@ async def inventory_command(ctx,member:discord.Member=None):
     await ctx.reply(embed=embed,mention_author=False)
 
 @bot.command(name="sell")
-async def sell_command(ctx,*,item_and_amount:str):
-    item_text=item_and_amount.strip()
-    if item_text.casefold() in {"inv","inventory"}:
-        inventory=get_inventory(ctx.guild.id,ctx.author.id)
-        sale_items=[
-            (name,int(quantity),MINING_ITEM_VALUES[name])
-            for name,quantity in list(inventory.items())
-            if int(quantity)>0 and name in MINING_ITEM_VALUES
-        ]
+async def sell_command(ctx, *, item_and_amount: str):
+    item_text = " ".join(item_and_amount.split())
+
+    # Bulk sale: b!sell inv or b!sell inventory
+    if item_text.casefold() in {"inv", "inventory"}:
+        inventory = get_inventory(ctx.guild.id, ctx.author.id)
+        sale_items = []
+        for name, raw_quantity in list(inventory.items()):
+            quantity = int(raw_quantity)
+            if quantity > 0 and name in MINING_ITEM_VALUES:
+                sale_items.append((name, quantity, MINING_ITEM_VALUES[name]))
+
         if not sale_items:
-            await ctx.reply("Your inventory has no sellable items.",mention_author=False)
+            await ctx.reply("Your inventory has no sellable items.", mention_author=False)
             return
-        total_items=sum(quantity for _,quantity,_ in sale_items)
-        proceeds=sum(quantity*value for _,quantity,value in sale_items)
-        for name,quantity,_ in sale_items:
-            remaining=int(inventory.get(name,0))-quantity
-            if remaining>0:
-                inventory[name]=remaining
+
+        total_items = sum(quantity for _, quantity, _ in sale_items)
+        proceeds = sum(quantity * value for _, quantity, value in sale_items)
+
+        for name, quantity, _ in sale_items:
+            remaining = int(inventory.get(name, 0)) - quantity
+            if remaining > 0:
+                inventory[name] = remaining
             else:
-                inventory.pop(name,None)
-        add_coins(ctx.guild.id,ctx.author.id,proceeds)
+                inventory.pop(name, None)
+
+        add_coins(ctx.guild.id, ctx.author.id, proceeds)
         save_economy()
         await ctx.reply(
-            f"💰 Sold your entire sellable inventory: **{total_items:,} items** across **{len(sale_items)} item types** for **{proceeds:,}** {BRAX_COINS_EMOJI}. "
-            f"New balance: **{coin_balance(ctx.guild.id,ctx.author.id):,}**.",
+            f"💰 Sold your entire sellable inventory: **{total_items:,} items** "
+            f"across **{len(sale_items)} item types** for **{proceeds:,}** {BRAX_COINS_EMOJI}. "
+            f"New balance: **{coin_balance(ctx.guild.id, ctx.author.id):,}**.",
             mention_author=False,
         )
         return
 
-    parts=item_text.rsplit(" ",1); amount=None
-    if len(parts)==2 and parts[1].isdigit(): item_text,amount=parts[0],int(parts[1])
-    item=normalize_mining_item(item_text)
+    # Single-item sale: b!sell <item> [amount]
+    parts = item_text.rsplit(" ", 1)
+    amount = None
+    if len(parts) == 2 and parts[1].isdigit():
+        item_text, amount = parts[0], int(parts[1])
+
+    item = normalize_mining_item(item_text)
     if item is None:
-        await ctx.reply("I don't recognize that item. Use b!inventory to check your items, or b!sell inv to sell your sellable inventory.",mention_author=False); return
-    inventory=get_inventory(ctx.guild.id,ctx.author.id); owned=int(inventory.get(item,0)); quantity=owned if amount is None else amount
-    if quantity<1 or owned<quantity:
-        await ctx.reply(f"You only have **{owned} {item}**.",mention_author=False); return
-    inventory[item]=owned-quantity
-    if inventory[item]<=0: inventory.pop(item,None)
-    proceeds=MINING_ITEM_VALUES[item]*quantity; add_coins(ctx.guild.id,ctx.author.id,proceeds); save_economy()
-    await ctx.reply(f"💰 Sold **{quantity} {item}** for **{proceeds:,}** {BRAX_COINS_EMOJI}. New balance: **{coin_balance(ctx.guild.id,ctx.author.id):,}**.",mention_author=False)
+        await ctx.reply(
+            "I don't recognize that item. Use b!inventory to check your items, "
+            "or b!sell inv to sell your sellable inventory.",
+            mention_author=False,
+        )
+        return
+
+    inventory = get_inventory(ctx.guild.id, ctx.author.id)
+    owned = int(inventory.get(item, 0))
+    quantity = owned if amount is None else amount
+    if quantity < 1 or owned < quantity:
+        await ctx.reply(f"You only have **{owned} {item}**.", mention_author=False)
+        return
+
+    remaining = owned - quantity
+    if remaining > 0:
+        inventory[item] = remaining
+    else:
+        inventory.pop(item, None)
+
+    proceeds = MINING_ITEM_VALUES[item] * quantity
+    add_coins(ctx.guild.id, ctx.author.id, proceeds)
+    save_economy()
+    await ctx.reply(
+        f"💰 Sold **{quantity} {item}** for **{proceeds:,}** {BRAX_COINS_EMOJI}. "
+        f"New balance: **{coin_balance(ctx.guild.id, ctx.author.id):,}**.",
+        mention_author=False,
+    )
 
 trade_completion_lock = asyncio.Lock()
 
@@ -4044,5 +4075,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation")
+print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation | sell-inventory-confirmed-2026-11-15")
 bot.run(TOKEN)
