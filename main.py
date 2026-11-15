@@ -1117,7 +1117,7 @@ async def on_message(message):
     if has_lesser_usage(member) and message.content.startswith("b!"):
         context = await bot.get_context(message)
         command_name = context.command.name if context.command else None
-        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview", "shop", "store", "convert", "tokens", "braxtokens", "specialbuy", "stealtokens", "jobs", "job", "work", "company", "cryptocreate", "cryptomarket", "cryptobuy", "cryptosell":
+        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview", "shop", "store", "convert", "tokens", "braxtokens", "specialbuy", "stealtokens", "jobs", "job", "work", "company", "cryptocreate", "cryptomarket", "cryptobuy", "cryptosell"}:
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
             strikes[str(member.id)] = count
@@ -3032,11 +3032,16 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
             economy_data["debt_cases"].pop(debt_key, None)
             save_economy()
         debt_note = ""
-    await ctx.reply(
+    balance_text = str(new_balance)
+    if len(balance_text.lstrip("-")) > 30:
+        balance_text = f"{balance_text[:8]}… ({len(balance_text.lstrip('-'))} digits)"
+    else:
+        balance_text = f"{new_balance:,}"
+    result_text = (
         (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount}** coin bet at **{multiplier}x**.")
-        + f" Balance: **{new_balance}** {BRAX_COINS_EMOJI}.{debt_note}",
-        mention_author=False,
+        + f" Balance: **{balance_text}** {BRAX_COINS_EMOJI}.{debt_note}"
     )
+    await ctx.reply(result_text[:1900], mention_author=False)
 
 @bot.command(name="coinlb", aliases=["coinleaderboard", "leaderboard", "richlist"])
 async def coin_leaderboard_command(ctx):
