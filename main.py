@@ -798,7 +798,7 @@ async def on_message(message):
     if has_lesser_usage(member) and message.content.startswith("b!"):
         context = await bot.get_context(message)
         command_name = context.command.name if context.command else None
-        if command_name not in {"mweute", "help"}:
+        if command_name not in {"mweute", "help", "gamble"}:
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
             strikes[str(member.id)] = count
@@ -2537,9 +2537,6 @@ async def coinflip_command(ctx, side: str, amount: int):
 
 @bot.command(name="gamble")
 async def gamble_command(ctx, amount: int, multiplier: int = 2):
-    if not (is_high_staff(ctx.author) or has_lesser_usage(ctx.author)):
-        await ctx.reply("You need BRAX Usage or Lesser BRAX Usage to gamble.", mention_author=False)
-        return
     if amount < 1 or multiplier < 2 or multiplier > MAX_GAMBLE_MULTIPLIER:
         await ctx.reply(f"Use b!gamble <amount> <multiplier>. Multipliers range from 2x to {MAX_GAMBLE_MULTIPLIER}x. Example: b!gamble 100 15", mention_author=False)
         return
@@ -2728,22 +2725,44 @@ HELP_PAGES = [
     },
 ]
 
+GAMBLING_HELP_PAGE = {
+    "title": "🎲 Gambling",
+    "description": (
+        "`b!gamble <amount> <2-30>` — Bet any positive amount of BRAX Coins at a 2x–30x multiplier. "
+        "Bets above 10x can put your balance into debt.\n"
+        "Example: `b!gamble 100 15`\n\n"
+        "You have a 1-in-the-multiplier chance to win. A win pays the bet multiplied by your selected multiplier; a loss deducts the bet."
+    ),
+    "footer": "BRAX • Gambling",
+}
+LESSER_FUN_HELP_PAGE = {
+    "title": "<:Fun:1571324174394200085> Fun",
+    "description": (
+        "`b!mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n\n"
+        "Use the forward button to view the gambling commands."
+    ),
+    "footer": "BRAX • Lesser B Usage",
+}
+LESSER_HELP_PAGES = [LESSER_FUN_HELP_PAGE, GAMBLING_HELP_PAGE]
 
-def make_help_embed(page_index):
-    page = HELP_PAGES[page_index]
+
+def make_help_embed(page_index, pages=None):
+    pages = pages or HELP_PAGES
+    page = pages[page_index]
     embed = discord.Embed(
         title=page["title"],
         description=page["description"],
         color=discord.Color.from_rgb(58, 48, 35),
     )
-    embed.set_footer(text=f'{page["footer"]} • Page {page_index + 1}/{len(HELP_PAGES)}')
+    embed.set_footer(text=f'{page["footer"]} • Page {page_index + 1}/{len(pages)}')
     return embed
 
 
 class BraxHelpView(discord.ui.View):
-    def __init__(self, author_id):
+    def __init__(self, author_id, pages=None):
         super().__init__(timeout=180)
         self.author_id = author_id
+        self.pages = pages or HELP_PAGES
         self.page = 0
         self.back_button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
@@ -2755,7 +2774,7 @@ class BraxHelpView(discord.ui.View):
             style=discord.ButtonStyle.secondary,
             emoji=discord.PartialEmoji.from_str("<:Forward:1571304228255957133>"),
             custom_id="brax:help:forward",
-            disabled=False,
+            disabled=len(self.pages) <= 1,
         )
         self.back_button.callback = self.go_back
         self.forward_button.callback = self.go_forward
@@ -2773,9 +2792,9 @@ class BraxHelpView(discord.ui.View):
 
     async def update_page(self, interaction):
         self.back_button.disabled = self.page == 0
-        self.forward_button.disabled = self.page == len(HELP_PAGES) - 1
+        self.forward_button.disabled = self.page == len(self.pages) - 1
         await interaction.response.edit_message(
-            embed=make_help_embed(self.page),
+            embed=make_help_embed(self.page, self.pages),
             view=self,
         )
 
@@ -2784,31 +2803,21 @@ class BraxHelpView(discord.ui.View):
         await self.update_page(interaction)
 
     async def go_forward(self, interaction):
-        self.page = min(len(HELP_PAGES) - 1, self.page + 1)
+        self.page = min(len(self.pages) - 1, self.page + 1)
         await self.update_page(interaction)
 
 
 @bot.command(name="help")
 async def brax_help_command(ctx):
     if has_lesser_usage(ctx.author):
-        fun_page = discord.Embed(
-            title="<:Fun:1571324174394200085> Fun",
-            description="b!mweute @user — Fake mute for fun.\nb!gamble <amount> <2-30> — Gamble BRAX Coins (can go into debt above 10x).\nb!balance — Check your wallet.\nb!coinlb — View the BRAX Coin leaderboard.\nb!shop — View the store.",
-            color=discord.Color.from_rgb(58, 48, 35),
-        )
-        fun_page.set_footer(text="BRAX • Lesser B Usage • Fun Only")
-        await ctx.reply(embed=fun_page, mention_author=False)
+        view = BraxHelpView(ctx.author.id, pages=LESSER_HELP_PAGES)
+        await ctx.reply(embed=make_help_embed(0, LESSER_HELP_PAGES), view=view, mention_author=False)
         return
     if not is_high_staff(ctx.author):
-        await ctx.reply(
-            f"{EMOJIS['denied']} You don't have permission to use BRAX commands. "
-            "You need a BRAX Usage role.",
-            mention_author=False,
-        )
+        await ctx.reply(embed=make_help_embed(0, [GAMBLING_HELP_PAGE]), mention_author=False)
         return
     view = BraxHelpView(ctx.author.id)
     await ctx.reply(embed=make_help_embed(0), view=view, mention_author=False)
-
 
 @bot.tree.command(name="help", description="Show BRAX commands for BRAX Usage role members.")
 async def brax_slash_help_command(interaction: discord.Interaction):
