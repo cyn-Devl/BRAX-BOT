@@ -773,11 +773,7 @@ async def tbr_tax_loop():
                     notices.append(f"**{coin_tax:,}** {BRAX_COINS_EMOJI} ({coin_rate * 100:.2f}%)")
                 if token_tax:
                     notices.append(f"**{token_tax:,}** BRAX Tokens ({token_rate * 100:.2f}%)")
-                await send_agency_webhook(
-                    guild, channel, "TBR",
-                    f"Yo <@{user_id}>! TBR collected {' and '.join(notices)} from your personal wallet. "
-                    "The funds are going into the jobs fund!",
-                )
+                # Individual tax notices are omitted to prevent webhook spam; cycle totals are reported below.
 
                 history = economy_data.setdefault("tax_event_history", {})
                 recent = [float(stamp) for stamp in history.get(account_key, []) if now - float(stamp) < 60]
@@ -791,8 +787,8 @@ async def tbr_tax_loop():
                     if strike == 1:
                         economy_data.setdefault("jail_until", {})[account_key] = now + 60
                         await send_agency_webhook(
-                            guild, channel, "FBI",
-                            f"⚠️ FBI WARNING: <@{user_id}> triggered repeated tax events. "
+                            guild, channel, "TFHSA",
+                            f"⚠️ TFHSA WARNING: <@{user_id}> triggered repeated tax events. "
                             "First warning: 60 seconds in jail for gambling fraud.",
                         )
                     else:
@@ -802,8 +798,8 @@ async def tbr_tax_loop():
                         economy_data.setdefault("jobs", {}).pop(account_key, None)
                         economy_data.setdefault("jail_until", {})[account_key] = now + 60
                         await send_agency_webhook(
-                            guild, channel, "FBI",
-                            f"🚨 FBI FINAL ACTION: <@{user_id}> repeated the tax-fraud offense. "
+                            guild, channel, "TFHSA",
+                            f"🚨 TFHSA FINAL ACTION: <@{user_id}> repeated the tax-fraud offense. "
                             "Their BRAX Coin and BRAX Token balances are wiped, and they are permanently banned from jobs.",
                         )
                     save_economy()
@@ -3486,9 +3482,9 @@ async def personal_bank_command(ctx, action: str, *, details: str = ""):
     action = action.casefold()
     bank = personal_bank_for(ctx.guild.id, ctx.author.id)
     if action in {"balance", "bal", "info"}:
-        lines = [f"BRAX Coins: **\${int(bank.get('coins', 0)):,}**", f"BRAX Tokens: **\${int(bank.get('tokens', 0)):,}**", f"Political Power: **\${int(bank.get('political_power', 0)):,}**"]
-        lines.extend(f"{name}: **\${int(count):,}**" for name, count in bank.setdefault("items", {}).items() if int(count) > 0)
-        await ctx.reply(embed=discord.Embed(title=f"{ctx.author.display_name}'s Personal Bank", description="\\n".join(lines), color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
+        lines = [f"BRAX Coins: **${int(bank.get('coins', 0)):,}**", f"BRAX Tokens: **${int(bank.get('tokens', 0)):,}**", f"Political Power: **${int(bank.get('political_power', 0)):,}**"]
+        lines.extend(f"{name}: **${int(count):,}**" for name, count in bank.setdefault("items", {}).items() if int(count) > 0)
+        await ctx.reply(embed=discord.Embed(title=f"{ctx.author.display_name}'s Personal Bank", description="\n".join(lines), color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
         return
     parts = details.split()
     if action not in {"deposit", "withdraw"} or len(parts) < 2:
