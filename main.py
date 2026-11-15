@@ -2565,22 +2565,175 @@ async def balance_command(ctx, member: discord.Member = None):
     )
     await ctx.reply(embed=embed, mention_author=False)
 
+class BraxShopView(discord.ui.View):
+    def __init__(self, author_id):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.page = 0
+        self.back = discord.ui.Button(label="Backward", style=discord.ButtonStyle.secondary, disabled=True)
+        self.forward = discord.ui.Button(label="Forward", style=discord.ButtonStyle.secondary)
+        self.back.callback = self.go_back
+        self.forward.callback = self.go_forward
+        self.add_item(self.back)
+        self.add_item(self.forward)
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the person who opened this shop can change pages.", ephemeral=True)
+            return False
+        return True
+
+    def make_embed(self):
+        if self.page == 0:
+            title = f"{BRAX_COINS_EMOJI} BRAX Store • Regular Shop"
+            description = (
+                "Earn 1 BRAX Coin every 10 messages.\n\n"
+                "50 Coins — Lesser BRAX Usage: b!buy lesser\n"
+                "7,500 Coins — BRAX Usage (staff review): b!buy usage\n"
+                "40 Coins — Remove one regular blacklist: b!buy unblacklist\n"
+                "450 Coins — Divine punishment removal (staff review): b!buy divine\n"
+                "500 Coins — Custom role: b!buy customrole\n\n"
+                "Use Forward for the Special Shop."
+            )
+        else:
+            title = "✦ BRAX Special Shop"
+            description = (
+                "50 BRAX Coins = 1 BRAX Token. Use b!convert; extra coins remain. Check with b!tokens.\n\n"
+                "5 Tokens — b!blacklist unlock: 3 uses; each regular blacklist lasts 3 hours.\n"
+                "2 Tokens — 2× gambling luck; each purchase doubles luck and stacks.\n"
+                "5 Tokens — Custom role with selected safe permissions: b!specialbuy customrole Name | permissions.\n"
+                "3 Tokens — 3 kick-protection charges.\n"
+                "20 Tokens — 1 ban-protection charge.\n"
+                "10 Tokens — Attempt to steal up to 10 tokens: b!stealtokens @member.\n"
+                "100 Tokens — Permanent token-stealing immunity.\n\n"
+                "Protection applies to BRAX bot kick/ban commands, not actions by server owners or other bots."
+            )
+        embed = discord.Embed(title=title, description=description, color=discord.Color.from_rgb(58, 48, 35))
+        embed.set_footer(text=f"BRAX Store • Page {self.page + 1}/2")
+        return embed
+
+    async def update_page(self, interaction):
+        self.back.disabled = self.page == 0
+        self.forward.disabled = self.page == 1
+        await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+    async def go_back(self, interaction):
+        self.page = 0
+        await self.update_page(interaction)
+
+    async def go_forward(self, interaction):
+        self.page = 1
+        await self.update_page(interaction)
+
+
 @bot.command(name="shop", aliases=["store"])
 async def shop_command(ctx):
-    embed = discord.Embed(
-        title=f"{BRAX_COINS_EMOJI} BRAX Store",
-        description=(
-            "Earn **1 BRAX Coin every 10 messages**. Coins are virtual server points.\n\n"
-            "**50** — Lesser BRAX Usage: b!buy lesser\n"
-            "**7,500** — BRAX Usage (staff review): b!buy usage\n"
-            "**40** — Remove one regular blacklist: b!buy unblacklist\n"
-            "**450** — Divine punishment removal (staff review): b!buy divine\n"
-            "**500** — Custom role: b!buy customrole\n\n"
-            "Check your wallet with b!balance."
-        ),
-        color=discord.Color.from_rgb(58, 48, 35),
-    )
-    await ctx.reply(embed=embed, mention_author=False)
+    view = BraxShopView(ctx.author.id)
+    await ctx.reply(embed=view.make_embed(), view=view, mention_author=False)
+
+
+@bot.command(name="convert")
+async def convert_tokens_command(ctx):
+    balance = coin_balance(ctx.guild.id, ctx.author.id)
+    amount = balance // 50
+    if amount < 1:
+        await ctx.reply(f"You need 50 BRAX Coins to convert. Your balance is {balance}.", mention_author=False)
+        return
+    spend_coins(ctx.guild.id, ctx.author.id, amount * 50)
+    add_tokens(ctx.guild.id, ctx.author.id, amount)
+    await ctx.reply(f"Converted {amount * 50} BRAX Coins into {amount} BRAX Token(s). Remaining coins: {coin_balance(ctx.guild.id, ctx.author.id)}. Token balance: {token_balance(ctx.guild.id, ctx.author.id)}.", mention_author=False)
+
+
+@bot.command(name="tokens", aliases=["braxtokens"])
+async def tokens_command(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    await ctx.reply(f"{member.display_name} has {token_balance(ctx.guild.id, member.id)} BRAX Token(s).", mention_author=False)
+
+
+@bot.command(name="specialbuy")
+async def special_buy_command(ctx, item: str, *, details: str = ""):
+    item = item.casefold().replace("-", "").replace("_", "")
+    aliases = {"gambleluck": "luck", "kickshield": "kickprotection", "banshield": "banprotection", "role": "customrole", "tokenimmunity": "stealimmunity"}
+    item = aliases.get(item, item)
+    prices = {"blacklist": 5, "luck": 2, "kickprotection": 3, "banprotection": 20, "customrole": 5, "stealimmunity": 100}
+    if item not in prices:
+        await ctx.reply("Unknown special item. Check page 2 of b!shop.", mention_author=False)
+        return
+    price = prices[item]
+    if token_balance(ctx.guild.id, ctx.author.id) < price:
+        await ctx.reply(f"You need {price} BRAX Tokens.", mention_author=False)
+        return
+
+    if item == "customrole":
+        if "|" not in details:
+            await ctx.reply("Use b!specialbuy customrole Role Name | view_channel, send_messages, read_message_history, attach_files, embed_links, add_reactions", mention_author=False)
+            return
+        name, permission_text = [part.strip() for part in details.split("|", 1)]
+        allowed = {"view_channel", "send_messages", "read_message_history", "attach_files", "embed_links", "use_application_commands", "add_reactions"}
+        selected = {part.strip().casefold() for part in permission_text.split(",") if part.strip()}
+        if not name or not selected or not selected.issubset(allowed):
+            await ctx.reply("Invalid role name or permissions. Administrator and moderation permissions aren't available.", mention_author=False)
+            return
+        if not ctx.guild.me.guild_permissions.manage_roles:
+            await ctx.reply("I need Manage Roles. No tokens spent.", mention_author=False)
+            return
+        spend_tokens(ctx.guild.id, ctx.author.id, price)
+        try:
+            perms = discord.Permissions.none()
+            for permission in selected:
+                setattr(perms, permission, True)
+            role = await ctx.guild.create_role(name=shorten(name, 80), permissions=perms, reason="BRAX Special Shop custom role")
+            await ctx.author.add_roles(role, reason="BRAX Special Shop custom role")
+        except discord.HTTPException:
+            add_tokens(ctx.guild.id, ctx.author.id, price)
+            await ctx.reply("Role creation failed; your tokens were returned.", mention_author=False)
+            return
+        await ctx.reply(f"Created {role.mention} with {', '.join(sorted(selected))}.", mention_author=False)
+        return
+
+    if not spend_tokens(ctx.guild.id, ctx.author.id, price):
+        return
+    if item == "blacklist":
+        key = special_purchase_key(ctx.guild.id, ctx.author.id, "blacklist_uses")
+        economy_data.setdefault("special_purchases", {})[key] = int(economy_data["special_purchases"].get(key, 0)) + 3
+        message = "You now have 3 regular blacklist uses. Each applied blacklist expires after 3 hours."
+    elif item == "luck":
+        key = economy_key(ctx.guild.id, ctx.author.id)
+        economy_data.setdefault("gamble_luck", {})[key] = int(economy_data["gamble_luck"].get(key, 1)) * 2
+        message = f"Your gambling luck is now {economy_data['gamble_luck'][key]}×."
+    elif item == "kickprotection":
+        add_protection(ctx.guild.id, ctx.author.id, "kick", 3)
+        message = "Added 3 kick-protection charges."
+    elif item == "banprotection":
+        add_protection(ctx.guild.id, ctx.author.id, "ban", 1)
+        message = "Added 1 ban-protection charge."
+    else:
+        economy_data.setdefault("special_purchases", {})[special_purchase_key(ctx.guild.id, ctx.author.id, "steal_immune")] = True
+        message = "You now have permanent token-stealing immunity."
+    save_economy()
+    await ctx.reply(f"Purchased for {price} BRAX Tokens. {message}", mention_author=False)
+
+
+@bot.command(name="stealtokens")
+async def steal_tokens_command(ctx, member: discord.Member):
+    if member.bot or member.id == ctx.author.id:
+        await ctx.reply("Choose another member.", mention_author=False)
+        return
+    immune = economy_data.setdefault("special_purchases", {}).get(special_purchase_key(ctx.guild.id, member.id, "steal_immune"), False)
+    if immune:
+        await ctx.reply("That member has permanent token-stealing immunity.", mention_author=False)
+        return
+    if token_balance(ctx.guild.id, ctx.author.id) < 10:
+        await ctx.reply("You need 10 BRAX Tokens to attempt a token steal.", mention_author=False)
+        return
+    stolen = min(10, token_balance(ctx.guild.id, member.id))
+    if stolen < 1:
+        await ctx.reply("That member has no tokens to steal.", mention_author=False)
+        return
+    spend_tokens(ctx.guild.id, ctx.author.id, 10)
+    set_token_balance(ctx.guild.id, member.id, token_balance(ctx.guild.id, member.id) - stolen)
+    add_tokens(ctx.guild.id, ctx.author.id, stolen)
+    await ctx.reply(f"You stole {stolen} BRAX Tokens from {member.mention}.", mention_author=False)
 
 @bot.command(name="buy")
 async def buy_command(ctx, item: str, *, details: str = ""):
