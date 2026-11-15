@@ -3595,11 +3595,39 @@ async def inventory_command(ctx,member:discord.Member=None):
 
 @bot.command(name="sell")
 async def sell_command(ctx,*,item_and_amount:str):
-    parts=item_and_amount.strip().rsplit(" ",1); amount=None; item_text=item_and_amount.strip()
+    item_text=item_and_amount.strip()
+    if item_text.casefold() in {"inv","inventory"}:
+        inventory=get_inventory(ctx.guild.id,ctx.author.id)
+        sale_items=[
+            (name,int(quantity),MINING_ITEM_VALUES[name])
+            for name,quantity in list(inventory.items())
+            if int(quantity)>0 and name in MINING_ITEM_VALUES
+        ]
+        if not sale_items:
+            await ctx.reply("Your inventory has no sellable items.",mention_author=False)
+            return
+        total_items=sum(quantity for _,quantity,_ in sale_items)
+        proceeds=sum(quantity*value for _,quantity,value in sale_items)
+        for name,quantity,_ in sale_items:
+            remaining=int(inventory.get(name,0))-quantity
+            if remaining>0:
+                inventory[name]=remaining
+            else:
+                inventory.pop(name,None)
+        add_coins(ctx.guild.id,ctx.author.id,proceeds)
+        save_economy()
+        await ctx.reply(
+            f"💰 Sold your entire sellable inventory: **{total_items:,} items** across **{len(sale_items)} item types** for **{proceeds:,}** {BRAX_COINS_EMOJI}. "
+            f"New balance: **{coin_balance(ctx.guild.id,ctx.author.id):,}**.",
+            mention_author=False,
+        )
+        return
+
+    parts=item_text.rsplit(" ",1); amount=None
     if len(parts)==2 and parts[1].isdigit(): item_text,amount=parts[0],int(parts[1])
     item=normalize_mining_item(item_text)
     if item is None:
-        await ctx.reply("I don't recognize that item. Check b!inventory for exact names.",mention_author=False); return
+        await ctx.reply("I don't recognize that item. Use b!inventory to check your items, or b!sell inv to sell your sellable inventory.",mention_author=False); return
     inventory=get_inventory(ctx.guild.id,ctx.author.id); owned=int(inventory.get(item,0)); quantity=owned if amount is None else amount
     if quantity<1 or owned<quantity:
         await ctx.reply(f"You only have **{owned} {item}**.",mention_author=False); return
@@ -3886,7 +3914,7 @@ HELP_PAGES = [
             "`b!crime` — Try a fictional crime for coins. Repeated attempts can get you caught by TBR and jailed for 1 minute.\n"
             "`b!company` — Create a company, invite members, and manage its bank.\n"
             "`b!cryptocreate`, `b!cryptomarket`, `b!cryptobuy`, `b!cryptosell` — Create and trade virtual community coins (5 tokens to create).\n"
-            "`b!sell <item> [amount]` — Sell finds for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
+            "`b!sell <item> [amount]` — Sell selected finds; `b!sell inv` / `b!sell inventory` — Sell your entire sellable inventory for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
             "Inside a trade: `b!offercoins`, `b!offeritem`, `b!tradeview`, `b!tradeconfirm`, `b!tradecancel`.\n\n"
             "UWU lock is restricted to the bot owner, Braxton, and ch33zee, and requires Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
