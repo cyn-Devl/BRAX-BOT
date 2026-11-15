@@ -100,6 +100,16 @@ economy_data.setdefault("special_purchases", {})
 economy_data.setdefault("temporary_blacklists", {})
 economy_data.setdefault("protection", {})
 economy_data.setdefault("gamble_luck", {})
+economy_data.setdefault("debt_cases", {})
+economy_data.setdefault("debt_strikes", {})
+economy_data.setdefault("gamble_only", {})
+economy_data.setdefault("jobs", {})
+economy_data.setdefault("work_cooldowns", {})
+economy_data.setdefault("companies", {})
+economy_data.setdefault("company_members", {})
+economy_data.setdefault("company_invites", {})
+economy_data.setdefault("custom_coins", {})
+economy_data.setdefault("crypto_holdings", {})
 
 def save_economy():
     with open(ECONOMY_FILE, "w", encoding="utf-8") as file:
@@ -633,6 +643,38 @@ async def temporary_blacklist_expiry_loop():
         await asyncio.sleep(30)
 
 
+async def debt_collection_loop():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = time.time()
+        for key, case in list(economy_data.setdefault("debt_cases", {}).items()):
+            if now - float(case.get("started_at", now)) < 300:
+                continue
+            guild_id = int(case.get("guild_id", 0))
+            user_id = int(case.get("user_id", 0))
+            channel_id = int(case.get("channel_id", 0))
+            strike = int(case.get("strike", 1))
+            guild = bot.get_guild(guild_id)
+            channel = guild.get_channel(channel_id) if guild else None
+            if coin_balance(guild_id, user_id) < 0:
+                set_coin_balance(guild_id, user_id, 0)
+            if strike >= 2:
+                economy_data.setdefault("gamble_only", {})[key] = True
+            economy_data["debt_cases"].pop(key, None)
+            save_economy()
+            if channel is None and guild is not None:
+                channel = guild.system_channel
+            if channel is not None:
+                try:
+                    if strike == 1:
+                        await channel.send(f"FBI/Zinzicraft collected <@{user_id}>'s overdue BRAX debt and cleared the negative balance.")
+                    else:
+                        await channel.send(f"FBI/Zinzicraft returned for <@{user_id}>. Debt cleared, but the mining license is revoked. BRAX economy commands are now limited to b!gamble, b!balance, and b!help.")
+                except discord.HTTPException as error:
+                    print(f"BRAX debt notice failed for {key}: {error}")
+        await asyncio.sleep(5)
+
+
 @bot.event
 async def on_ready():
     print("===================================")
@@ -667,6 +709,9 @@ async def on_ready():
     if not getattr(bot, "_temporary_blacklist_task_started", False):
         bot.loop.create_task(temporary_blacklist_expiry_loop())
         bot._temporary_blacklist_task_started = True
+    if not getattr(bot, "_debt_collection_task_started", False):
+        bot.loop.create_task(debt_collection_loop())
+        bot._debt_collection_task_started = True
     if not getattr(bot, "_temporary_blacklist_task_started", False):
         bot.loop.create_task(temporary_blacklist_expiry_loop())
         bot._temporary_blacklist_task_started = True
@@ -1001,10 +1046,21 @@ async def on_message(message):
     # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
     member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
 
+    if member is not None and economy_data.setdefault("gamble_only", {}).get(economy_key(message.guild.id, member.id)):
+        if message.content.startswith("b!"):
+            context = await bot.get_context(message)
+            command_name = context.command.name if context.command else None
+            if command_name not in {"gamble", "balance", "bal", "coins", "help"}:
+                await message.reply(
+                    "FBI/Zinzicraft revoked your mining license. You can currently only use b!gamble, b!balance, and b!help.",
+                    mention_author=False,
+                )
+                return
+
     if has_lesser_usage(member) and message.content.startswith("b!"):
         context = await bot.get_context(message)
         command_name = context.command.name if context.command else None
-        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview", "shop", "store", "convert", "tokens", "braxtokens", "specialbuy", "stealtokens"}:
+        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview", "shop", "store", "convert", "tokens", "braxtokens", "specialbuy", "stealtokens", "jobs", "job", "work", "company", "cryptocreate", "cryptomarket", "cryptobuy", "cryptosell":
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
             strikes[str(member.id)] = count
@@ -2895,7 +2951,26 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
     if won:
         add_coins(ctx.guild.id, ctx.author.id, amount * multiplier)
     new_balance = coin_balance(ctx.guild.id, ctx.author.id)
-    debt_note = " You are now in debt." if new_balance < 0 else ""
+    if new_balance < 0:
+        debt_key = economy_key(ctx.guild.id, ctx.author.id)
+        debt_cases = economy_data.setdefault("debt_cases", {})
+        if debt_key not in debt_cases:
+            strikes = economy_data.setdefault("debt_strikes", {})
+            strike = int(strikes.get(debt_key, 0)) + 1
+            strikes[debt_key] = strike
+            debt_cases[debt_key] = {
+                "guild_id": ctx.guild.id,
+                "user_id": ctx.author.id,
+                "channel_id": ctx.channel.id,
+                "started_at": time.time(),
+                "strike": strike,
+            }
+            save_economy()
+        else:
+            strike = int(debt_cases[debt_key].get("strike", 1))
+        debt_note = f" FBI/Zinzicraft has been notified. You have 5 minutes to settle the debt (case {strike})."
+    else:
+        debt_note = ""
     await ctx.reply(
         (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount}** coin bet at **{multiplier}x**.")
         + f" Balance: **{new_balance}** {BRAX_COINS_EMOJI}.{debt_note}",
@@ -2993,9 +3068,267 @@ async def stocksell_command(ctx, symbol: str, shares: int):
 
 
 
+JOB_DEFINITIONS = {
+    "miner": (18, 34, "Collects materials"),
+    "courier": (22, 40, "Delivers packages"),
+    "mechanic": (25, 45, "Repairs equipment"),
+    "chef": (20, 38, "Prepares meals"),
+    "analyst": (24, 48, "Studies the market"),
+    "developer": (28, 52, "Builds software"),
+    "explorer": (23, 44, "Finds rare collectibles"),
+    "security": (26, 46, "Protects company sites"),
+}
+
+
+@bot.command(name="jobs")
+async def jobs_command(ctx):
+    current = economy_data.setdefault("jobs", {}).get(economy_key(ctx.guild.id, ctx.author.id))
+    rows = []
+    for name, (low, high, description) in JOB_DEFINITIONS.items():
+        tag = " — YOUR JOB" if current == name else ""
+        rows.append(f"**{name.title()}**: {description} | {low}-{high} coins per shift{tag}")
+    embed = discord.Embed(
+        title="Available Jobs",
+        description="\n".join(rows) + "\nJoin with b!job join <name>; work every 30 minutes with b!work.",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    await ctx.reply(embed=embed, mention_author=False)
+
+
+@bot.command(name="job")
+async def job_command(ctx, action: str, *, job_name: str = ""):
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    if action.casefold() == "join":
+        name = job_name.casefold().strip()
+        if name not in JOB_DEFINITIONS:
+            await ctx.reply("That job doesn't exist. Use b!jobs to see the list.", mention_author=False)
+            return
+        economy_data.setdefault("jobs", {})[key] = name
+        economy_data.setdefault("work_cooldowns", {}).pop(key, None)
+        save_economy()
+        await ctx.reply(f"You're now employed as a {name.title()}. Use b!work every 30 minutes.", mention_author=False)
+    elif action.casefold() == "leave":
+        old = economy_data.setdefault("jobs", {}).pop(key, None)
+        economy_data.setdefault("work_cooldowns", {}).pop(key, None)
+        save_economy()
+        await ctx.reply("You left your job." if old else "You don't currently have a job.", mention_author=False)
+    else:
+        await ctx.reply("Use b!job join <name> or b!job leave.", mention_author=False)
+
+
+@bot.command(name="work")
+async def work_command(ctx):
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    job = economy_data.setdefault("jobs", {}).get(key)
+    if job not in JOB_DEFINITIONS:
+        await ctx.reply("Get a job first with b!jobs and b!job join <name>.", mention_author=False)
+        return
+    now = time.time()
+    ready = float(economy_data.setdefault("work_cooldowns", {}).get(key, 0))
+    if now < ready:
+        await ctx.reply(f"Your next shift is ready in {int(ready - now + 0.999)} seconds.", mention_author=False)
+        return
+    low, high, _ = JOB_DEFINITIONS[job]
+    pay = random.randint(low, high)
+    economy_data["work_cooldowns"][key] = now + 1800
+    add_coins(ctx.guild.id, ctx.author.id, pay)
+    save_economy()
+    await ctx.reply(f"Shift complete! Your {job.title()} job paid {pay} {BRAX_COINS_EMOJI}.", mention_author=False)
+
+
+def company_key(guild_id, owner_id):
+    return f"{guild_id}:{owner_id}"
+
+
+def company_for_member(guild_id, user_id):
+    cid = economy_data.setdefault("company_members", {}).get(economy_key(guild_id, user_id))
+    return economy_data.setdefault("companies", {}).get(cid) if cid else None
+
+
+@bot.command(name="company")
+async def company_command(ctx, action: str, *, details: str = ""):
+    action = action.casefold()
+    user_key = economy_key(ctx.guild.id, ctx.author.id)
+    companies = economy_data.setdefault("companies", {})
+    memberships = economy_data.setdefault("company_members", {})
+    invites = economy_data.setdefault("company_invites", {})
+    company = company_for_member(ctx.guild.id, ctx.author.id)
+
+    if action == "create":
+        name = details.strip()
+        if not name or len(name) > 32 or user_key in memberships:
+            await ctx.reply("Choose a company name up to 32 characters. You must leave your current company first.", mention_author=False)
+            return
+        if not spend_coins(ctx.guild.id, ctx.author.id, 1000):
+            await ctx.reply("Creating a company costs 1,000 BRAX Coins.", mention_author=False)
+            return
+        cid = company_key(ctx.guild.id, ctx.author.id)
+        companies[cid] = {"guild_id": ctx.guild.id, "owner_id": ctx.author.id, "name": name, "bank": 0, "members": [ctx.author.id]}
+        memberships[user_key] = cid
+        save_economy()
+        await ctx.reply(f"Company {name} has been founded! Invite members with b!company invite @member.", mention_author=False)
+
+    elif action == "invite":
+        if company is None or int(company.get("owner_id", 0)) != ctx.author.id:
+            await ctx.reply("Only a company owner can invite members.", mention_author=False)
+            return
+        try:
+            invited = await commands.MemberConverter().convert(ctx, details)
+        except commands.BadArgument:
+            await ctx.reply("Mention a member: b!company invite @member.", mention_author=False)
+            return
+        if invited.bot or economy_key(ctx.guild.id, invited.id) in memberships:
+            await ctx.reply("That member can't join this company.", mention_author=False)
+            return
+        invites[economy_key(ctx.guild.id, invited.id)] = company_key(ctx.guild.id, ctx.author.id)
+        save_economy()
+        await ctx.reply(f"Invitation sent to {invited.mention}. They can use b!company join.", mention_author=False)
+
+    elif action == "join":
+        cid = invites.get(user_key)
+        if not cid or cid not in companies:
+            await ctx.reply("You don't have a pending company invitation.", mention_author=False)
+            return
+        company = companies[cid]
+        company.setdefault("members", []).append(ctx.author.id)
+        memberships[user_key] = cid
+        invites.pop(user_key, None)
+        save_economy()
+        await ctx.reply(f"You joined {company['name']}.", mention_author=False)
+
+    elif action == "leave":
+        if company is None:
+            await ctx.reply("You're not in a company.", mention_author=False)
+            return
+        cid = memberships.pop(user_key)
+        company = companies.get(cid)
+        if company:
+            company["members"] = [uid for uid in company.get("members", []) if int(uid) != ctx.author.id]
+            if int(company.get("owner_id", 0)) == ctx.author.id:
+                for uid in list(company["members"]):
+                    memberships.pop(economy_key(ctx.guild.id, int(uid)), None)
+                companies.pop(cid, None)
+        save_economy()
+        await ctx.reply("You left the company. An owner's company is dissolved when they leave.", mention_author=False)
+
+    elif action == "deposit":
+        try:
+            amount = int(details)
+        except ValueError:
+            amount = 0
+        if company is None or amount < 1 or not spend_coins(ctx.guild.id, ctx.author.id, amount):
+            await ctx.reply("Use b!company deposit <amount> while in a company and have enough coins.", mention_author=False)
+            return
+        company["bank"] = int(company.get("bank", 0)) + amount
+        save_economy()
+        await ctx.reply(f"Deposited {amount:,} coins into {company['name']}.", mention_author=False)
+
+    elif action == "withdraw":
+        try:
+            amount = int(details)
+        except ValueError:
+            amount = 0
+        if company is None or int(company.get("owner_id", 0)) != ctx.author.id or amount < 1 or int(company.get("bank", 0)) < amount:
+            await ctx.reply("Only the owner can withdraw, and the company bank must have enough coins.", mention_author=False)
+            return
+        company["bank"] = int(company.get("bank", 0)) - amount
+        add_coins(ctx.guild.id, ctx.author.id, amount)
+        save_economy()
+        await ctx.reply(f"Withdrew {amount:,} coins from {company['name']}.", mention_author=False)
+
+    elif action == "info":
+        if company is None:
+            await ctx.reply("You're not in a company.", mention_author=False)
+            return
+        names = []
+        for uid in company.get("members", []):
+            member = ctx.guild.get_member(int(uid))
+            names.append(member.display_name if member else f"User {uid}")
+        embed = discord.Embed(
+            title=f"Company: {company['name']}",
+            description=f"Owner: <@{company['owner_id']}>\nMembers: {', '.join(names)}\nCompany bank: {int(company.get('bank', 0)):,} coins",
+            color=discord.Color.from_rgb(58, 48, 35),
+        )
+        await ctx.reply(embed=embed, mention_author=False)
+    else:
+        await ctx.reply("Use b!company create <name>, invite @member, join, leave, info, deposit <amount>, or withdraw <amount>.", mention_author=False)
+
+
+@bot.command(name="cryptocreate")
+async def crypto_create_command(ctx, symbol: str, *, name: str):
+    symbol = symbol.upper()
+    if not re.fullmatch(r"[A-Z]{3,6}", symbol) or not name.strip() or len(name) > 32:
+        await ctx.reply("Use b!cryptocreate SYMBOL Coin Name. Symbols must be 3-6 letters.", mention_author=False)
+        return
+    market = economy_data.setdefault("custom_coins", {})
+    key = f"{ctx.guild.id}:{symbol}"
+    if key in market or symbol in STOCK_START_PRICES:
+        await ctx.reply("That symbol is already taken in this server.", mention_author=False)
+        return
+    if not spend_tokens(ctx.guild.id, ctx.author.id, 5):
+        await ctx.reply("Creating a community coin costs 5 Brax Tokens. Convert coins with b!convert.", mention_author=False)
+        return
+    market[key] = {"guild_id": ctx.guild.id, "creator_id": ctx.author.id, "name": name.strip(), "symbol": symbol, "price": 10}
+    save_economy()
+    await ctx.reply(f"{name.strip()} ({symbol}) is now listed at 10 BRAX Coins per unit. Members can buy it with b!cryptobuy {symbol} <amount>.", mention_author=False)
+
+
+@bot.command(name="cryptomarket")
+async def crypto_market_command(ctx):
+    coins = [coin for key, coin in economy_data.setdefault("custom_coins", {}).items() if key.startswith(f"{ctx.guild.id}:")]
+    if not coins:
+        await ctx.reply("No community coins yet. Create one for 5 tokens with b!cryptocreate SYMBOL Coin Name.", mention_author=False)
+        return
+    lines = [f"**{coin['name']} ({coin['symbol']})** — {int(coin['price']):,} BRAX Coins per unit | Creator: <@{coin['creator_id']}>" for coin in coins]
+    await ctx.reply(embed=discord.Embed(title="Community Coin Market", description="\n".join(lines), color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
+
+
+@bot.command(name="cryptobuy")
+async def crypto_buy_command(ctx, symbol: str, amount: int):
+    symbol = symbol.upper()
+    coin = economy_data.setdefault("custom_coins", {}).get(f"{ctx.guild.id}:{symbol}")
+    if coin is None or amount < 1 or amount > 100000:
+        await ctx.reply("Choose a listed coin and a quantity from 1 to 100,000.", mention_author=False)
+        return
+    price = max(1, int(coin["price"]))
+    cost = price * amount
+    if not spend_coins(ctx.guild.id, ctx.author.id, cost):
+        await ctx.reply(f"You need {cost:,} BRAX Coins to buy that amount.", mention_author=False)
+        return
+    holdings = economy_data.setdefault("crypto_holdings", {}).setdefault(economy_key(ctx.guild.id, ctx.author.id), {})
+    holdings[symbol] = int(holdings.get(symbol, 0)) + amount
+    coin["price"] = max(1, int(price * random.uniform(0.97, 1.05)))
+    save_economy()
+    await ctx.reply(f"Bought {amount:,} {symbol} for {cost:,} BRAX Coins.", mention_author=False)
+
+
+@bot.command(name="cryptosell")
+async def crypto_sell_command(ctx, symbol: str, amount: int):
+    symbol = symbol.upper()
+    coin = economy_data.setdefault("custom_coins", {}).get(f"{ctx.guild.id}:{symbol}")
+    holdings = economy_data.setdefault("crypto_holdings", {}).setdefault(economy_key(ctx.guild.id, ctx.author.id), {})
+    owned = int(holdings.get(symbol, 0))
+    if coin is None or amount < 1 or owned < amount:
+        await ctx.reply("You don't own that many units of that coin.", mention_author=False)
+        return
+    price = max(1, int(coin["price"]))
+    proceeds = price * amount
+    holdings[symbol] = owned - amount
+    if holdings[symbol] <= 0:
+        holdings.pop(symbol, None)
+    coin["price"] = max(1, int(price * random.uniform(0.95, 1.03)))
+    add_coins(ctx.guild.id, ctx.author.id, proceeds)
+    save_economy()
+    await ctx.reply(f"Sold {amount:,} {symbol} for {proceeds:,} BRAX Coins.", mention_author=False)
+
+
 @bot.command(name="mine")
 async def mine_command(ctx):
-    key=economy_key(ctx.guild.id,ctx.author.id); now=time.time()
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    if economy_data.setdefault("gamble_only", {}).get(key):
+        await ctx.reply("FBI/Zinzicraft revoked your mining license. You can no longer mine.", mention_author=False)
+        return
+    now = time.time()
     cooldowns=economy_data.setdefault("mine_cooldowns",{}); ready=float(cooldowns.get(key,0))
     if now<ready:
         await ctx.reply(f"Your digging tools need a moment. Try again in **{max(1,int(ready-now+0.999))}s**.",mention_author=False); return
@@ -3304,7 +3637,10 @@ HELP_PAGES = [
             "`b!coinflip heads|tails <amount>` and `b!gamble <amount> <2-30>` — Play coin games.\n"
             "`b!coinlb` — View the BRAX Coin leaderboard. `b!coinadd @user <amount>` — Add coins (Braxton only).\n"
             "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n"
-            "`b!mine` — Dig for Mick & Rorty materials and collectibles. `b!inventory` — View your finds.\n"
+            "`b!mine` — Dig for Mick & Rorty materials and collectibles (2.5-second cooldown). `b!inventory` — View your finds.\n"
+            "`b!jobs`, `b!job join <name>`, `b!work` — Choose a job and earn wages every 30 minutes.\n"
+            "`b!company` — Create a company, invite members, and manage its bank.\n"
+            "`b!cryptocreate`, `b!cryptomarket`, `b!cryptobuy`, `b!cryptosell` — Create and trade virtual community coins (5 tokens to create).\n"
             "`b!sell <item> [amount]` — Sell finds for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
             "Inside a trade: `b!offercoins`, `b!offeritem`, `b!tradeview`, `b!tradeconfirm`, `b!tradecancel`.\n\n"
             "UWU lock is restricted to the bot owner, Braxton, and ch33zee, and requires Manage Messages. Fun actions are also sent "
