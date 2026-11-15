@@ -3482,8 +3482,8 @@ async def personal_bank_command(ctx, action: str, *, details: str = ""):
     action = action.casefold()
     bank = personal_bank_for(ctx.guild.id, ctx.author.id)
     if action in {"balance", "bal", "info"}:
-        lines = [f"BRAX Coins: **${int(bank.get('coins', 0)):,}**", f"BRAX Tokens: **${int(bank.get('tokens', 0)):,}**", f"Political Power: **${int(bank.get('political_power', 0)):,}**"]
-        lines.extend(f"{name}: **${int(count):,}**" for name, count in bank.setdefault("items", {}).items() if int(count) > 0)
+        lines = [f"BRAX Coins: **{int(bank.get('coins', 0)):,}**", f"BRAX Tokens: **{int(bank.get('tokens', 0)):,}**", f"Political Power: **{int(bank.get('political_power', 0)):,}**"]
+        lines.extend(f"{name}: **{int(count):,}**" for name, count in bank.setdefault("items", {}).items() if int(count) > 0)
         await ctx.reply(embed=discord.Embed(title=f"{ctx.author.display_name}'s Personal Bank", description="\n".join(lines), color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
         return
     parts = details.split()
