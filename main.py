@@ -721,9 +721,9 @@ async def debt_collection_loop():
             if channel is not None:
                 try:
                     if strike == 1:
-                        await channel.send(f"FBI/Zinzicraft collected <@{user_id}>'s overdue BRAX debt and cleared the negative balance.")
+                        await channel.send(f"TFHSA collected <@{user_id}>'s overdue BRAX debt and cleared the negative balance.")
                     else:
-                        await channel.send(f"FBI/Zinzicraft returned for <@{user_id}>. Debt cleared, but the mining license is revoked. BRAX economy commands are now limited to b!jobs, b!job, b!work, b!balance, and b!help.")
+                        await channel.send(f"TFHSA returned for <@{user_id}>. Debt cleared, but the mining license is revoked. BRAX economy commands are now limited to b!jobs, b!job, b!work, b!balance, and b!help.")
                 except discord.HTTPException as error:
                     print(f"BRAX debt notice failed for {key}: {error}")
         await asyncio.sleep(5)
@@ -1109,7 +1109,7 @@ async def on_message(message):
             command_name = context.command.name if context.command else None
             if command_name not in {"jobs", "job", "work", "balance", "bal", "coins", "help"}:
                 await message.reply(
-                    "FBI/Zinzicraft revoked your mining license. You can currently use b!jobs, b!job, b!work, b!balance, and b!help.",
+                    "TFHSA revoked your mining license. You can currently use b!jobs, b!job, b!work, b!balance, and b!help.",
                     mention_author=False,
                 )
                 return
@@ -3005,8 +3005,18 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
         await ctx.reply(f"Use b!gamble <amount> <multiplier>. Multipliers range from 2x to {MAX_GAMBLE_MULTIPLIER}x. Example: b!gamble 100 15", mention_author=False)
         return
     balance = coin_balance(ctx.guild.id, ctx.author.id)
-    if multiplier <= 10 and balance < amount:
-        await ctx.reply(f"Not enough BRAX Coins. Your balance is {balance} {BRAX_COINS_EMOJI}. Bets above 10x can put you in debt.", mention_author=False)
+    # Every gamble must be fully covered by the player's current wallet.
+    # High multipliers never allow borrowing or creating a negative balance.
+    if balance < amount:
+        balance_digits = len(str(abs(balance)))
+        balance_display = f"{balance:,}" if balance_digits <= 30 else f"{str(balance)[:8]}… ({balance_digits} digits)"
+        amount_digits = len(str(amount))
+        amount_display = f"{amount:,}" if amount_digits <= 30 else f"{str(amount)[:8]}… ({amount_digits} digits)"
+        await ctx.reply(
+            f"You can only gamble coins you currently own. Your wallet has **{balance_display}** {BRAX_COINS_EMOJI}, "
+            f"so you cannot place a **{amount_display}** coin bet.",
+            mention_author=False,
+        )
         return
     # Higher multipliers are riskier. A win chance of 1/multiplier keeps the payout odds aligned.
     luck = max(1, int(economy_data.setdefault('gamble_luck', {}).get(economy_key(ctx.guild.id, ctx.author.id), 1)))
@@ -3032,7 +3042,7 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
             save_economy()
         else:
             strike = int(debt_cases[debt_key].get("strike", 1))
-        debt_note = f" FBI/Zinzicraft has been notified. You have 5 minutes to settle the debt (case {strike})."
+        debt_note = f" TFHSA has been notified. You have 5 minutes to settle the debt (case {strike})."
     else:
         debt_key = economy_key(ctx.guild.id, ctx.author.id)
         if debt_key in economy_data.setdefault("debt_cases", {}):
@@ -3044,8 +3054,9 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
         balance_text = f"{balance_text[:8]}… ({len(balance_text.lstrip('-'))} digits)"
     else:
         balance_text = f"{new_balance:,}"
+    amount_text = f"{amount:,}" if len(str(amount)) <= 30 else f"{str(amount)[:8]}… ({len(str(amount))} digits)"
     result_text = (
-        (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount}** coin bet at **{multiplier}x**.")
+        (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount_text}** coin bet at **{multiplier}x**.")
         + f" Balance: **{balance_text}** {BRAX_COINS_EMOJI}.{debt_note}"
     )
     await ctx.reply(result_text[:1900], mention_author=False)
@@ -3399,7 +3410,7 @@ async def crypto_sell_command(ctx, symbol: str, amount: int):
 async def mine_command(ctx):
     key = economy_key(ctx.guild.id, ctx.author.id)
     if economy_data.setdefault("gamble_only", {}).get(key):
-        await ctx.reply("FBI/Zinzicraft revoked your mining license. You can no longer mine.", mention_author=False)
+        await ctx.reply("TFHSA revoked your mining license. You can no longer mine.", mention_author=False)
         return
     now = time.time()
     cooldowns=economy_data.setdefault("mine_cooldowns",{}); ready=float(cooldowns.get(key,0))
