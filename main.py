@@ -2325,8 +2325,8 @@ HELP_PAGES = [
     {
         "title": "<a:Tools:1571303064256909482> Server Tools",
         "description": (
-            "`b!usageadd @user` — Give the brax usage role (Braxton and kaydnn only).
-            `b!lusageadd @user` — Give the Lesser B Usage role (any BRAX Usage member).\n"
+            "`b!usageadd @user` — Give the brax usage role (Braxton and kaydnn only).\n"
+            "`b!lusageadd @user` — Give the Lesser B Usage role (any BRAX Usage member).\n"
             "`b!ticketpanel` — Post the ticket panel.\n"
             "`b!blacklist @user` — Open the blacklist menu.\n"
             "`b!help` — Open this interactive help menu.\n"
