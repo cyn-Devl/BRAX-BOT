@@ -171,7 +171,7 @@ def personal_bank_for(guild_id, user_id):
 
 def parse_bank_asset(value):
     value = str(value).casefold().replace("-", "").replace("_", "").replace(" ", "")
-    return {"coin":"coins","braxcoins":"coins","token":"tokens","braxtokens":"tokens","pp":"political_power","politicalpower":"political_power","item":"item","items":"item"}.get(value)
+    return {"coin":"coins","coins":"coins","braxcoins":"coins","token":"tokens","tokens":"tokens","braxtokens":"tokens","pp":"political_power","politicalpower":"political_power","item":"item","items":"item"}.get(value)
 
 
 def special_purchase_key(guild_id, user_id, name):
@@ -3667,7 +3667,7 @@ async def company_command(ctx, action: str, *, details: str = ""):
         )
         await ctx.reply(embed=embed, mention_author=False)
     else:
-        await ctx.reply("Use b!company create <name>, invite @member, join, leave, info, deposit <amount>, or withdraw <amount>.", mention_author=False)
+        await ctx.reply("Use b!company create <name>, invite @member, join, leave, info, deposit <asset> <amount>, or withdraw <asset> <amount>.", mention_author=False)
 
 
 @bot.command(name="cryptocreate")
