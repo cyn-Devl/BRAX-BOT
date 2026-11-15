@@ -983,7 +983,7 @@ async def on_message(message):
     if has_lesser_usage(member) and message.content.startswith("b!"):
         context = await bot.get_context(message)
         command_name = context.command.name if context.command else None
-        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview"}:
+        if command_name not in {"mweute", "help", "gamble", "mine", "inventory", "sell", "trade", "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview", "shop", "store", "convert", "tokens", "braxtokens", "specialbuy", "stealtokens"}:
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
             strikes[str(member.id)] = count
