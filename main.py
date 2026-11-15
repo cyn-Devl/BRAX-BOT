@@ -1479,7 +1479,7 @@ class BlacklistView(discord.ui.View):
 @bot.command(name="blacklist")
 async def blacklist_command(ctx, user: discord.Member):
     if not is_high_staff(ctx.author) and ctx.author.id not in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS:
-        await ctx.reply("You need the BRAX Usage role to use this command. The six Divine-authorized users may also open this menu for Divine punishment only.", mention_author=False)
+        await ctx.reply("You need the BRAX Usage role to use this command. The seven Divine-authorized users may also open this menu for Divine punishment only.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_roles:
         await ctx.reply("You also need the **Manage Roles** permission.", mention_author=False)
@@ -2156,7 +2156,7 @@ class UwuListView(discord.ui.View):
 @bot.command(name="uwulist")
 async def uwu_list_command(ctx):
     if not is_uwu_authorized(ctx.author):
-        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner and Braxton can view or manage UWU locks.", mention_author=False)
+        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner, Braxton, and ch33zee can view or manage UWU locks.", mention_author=False)
         return
     prefix = f"{ctx.guild.id}:"
     locked_ids = []
@@ -2956,7 +2956,7 @@ HELP_PAGES = [
             "`b!mine` — Dig for Mick & Rorty materials and collectibles. `b!inventory` — View your finds.\n"
             "`b!sell <item> [amount]` — Sell finds for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
             "Inside a trade: `b!offercoins`, `b!offeritem`, `b!tradeconfirm`, `b!tradecancel`.\n\n"
-            "UWU lock requires BRAX Usage and Manage Messages. Fun actions are also sent "
+            "UWU lock is restricted to the bot owner, Braxton, and ch33zee, and requires Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
         ),
         "footer": "BRAX • Fun",
