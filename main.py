@@ -116,6 +116,7 @@ def record_moderation_action(target, action, moderator, reason, duration=None):
         entries = moderation_history.setdefault(str(target.id), [])
         entries.append({
             "action": str(action),
+            "target_name": str(target),
             "moderator": str(moderator),
             "moderator_id": moderator.id,
             "reason": str(reason or "No reason provided"),
@@ -1708,10 +1709,102 @@ class ModerationHistoryView(discord.ui.View):
         self.page = min(self.total_pages - 1, self.page + 1)
         await self.update_page(interaction)
 
+def moderator_action_entries(moderator_id):
+    entries = []
+    for target_id, target_entries in moderation_history.items():
+        for entry in target_entries:
+            if entry.get("moderator_id") == moderator_id:
+                item = dict(entry)
+                item["target_id"] = target_id
+                entries.append(item)
+    entries.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+    return entries
+
+def moderator_action_history_embed(moderator_id, entries, page):
+    total_pages = max(1, (len(entries) + 2) // 3)
+    selected = entries[page * 3:page * 3 + 3]
+    embed = discord.Embed(
+        title=f"Your BRAX Action Logs • {moderator_label(moderator_id)}",
+        description=f"Showing {len(selected)} of {len(entries)} actions you performed.",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    for index, entry in enumerate(selected, start=page * 3 + 1):
+        details = [
+            f"Action: {entry.get('action', 'Unknown')}",
+            f"Target: {entry.get('target_name', 'Unknown')} (ID: {entry.get('target_id', 'Unknown')})",
+            f"Reason: {shorten(entry.get('reason', 'No reason provided'), 500)}",
+            f"When: {entry.get('timestamp', 'Unknown')}",
+        ]
+        if entry.get("duration"):
+            details.append(f"Duration: {entry['duration']}")
+        embed.add_field(name=f"Action {index}", value="\n".join(details), inline=False)
+    if not entries:
+        embed.description = "You haven't performed any logged BRAX actions yet."
+    embed.set_footer(text=f"BRAX • Your Actions • Page {page + 1}/{total_pages}")
+    return embed
+
+class ModeratorActionHistoryView(discord.ui.View):
+    def __init__(self, moderator_id, author_id, entries):
+        super().__init__(timeout=180)
+        self.moderator_id = moderator_id
+        self.author_id = author_id
+        self.entries = entries
+        self.page = 0
+        self.total_pages = max(1, (len(entries) + 2) // 3)
+        self.back_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=discord.PartialEmoji.from_str("<:Backwards:1571304371646632077>"),
+            disabled=True,
+        )
+        self.forward_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=discord.PartialEmoji.from_str("<:Forward:1571304228255957133>"),
+            disabled=self.total_pages <= 1,
+        )
+        self.back_button.callback = self.go_back
+        self.forward_button.callback = self.go_forward
+        self.add_item(self.back_button)
+        self.add_item(self.forward_button)
+
+    async def interaction_check(self, interaction):
+        if not is_high_staff(interaction.user):
+            await interaction.response.send_message("You need the BRAX Usage role to view these logs.", ephemeral=True)
+            return False
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the person who opened these logs can change pages.", ephemeral=True)
+            return False
+        return True
+
+    async def update_page(self, interaction):
+        self.back_button.disabled = self.page == 0
+        self.forward_button.disabled = self.page >= self.total_pages - 1
+        await interaction.response.edit_message(
+            embed=moderator_action_history_embed(self.moderator_id, self.entries, self.page),
+            view=self,
+        )
+
+    async def go_back(self, interaction):
+        self.page = max(0, self.page - 1)
+        await self.update_page(interaction)
+
+    async def go_forward(self, interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        await self.update_page(interaction)
+
+
 @bot.command(name="mlogs")
-async def moderation_logs_command(ctx, member: discord.Member):
+async def moderation_logs_command(ctx, member: discord.Member = None):
     if not is_high_staff(ctx.author):
         await ctx.reply("You need the brax usage role to view moderation logs.", mention_author=False)
+        return
+    if member is None:
+        entries = moderator_action_entries(ctx.author.id)
+        view = ModeratorActionHistoryView(ctx.author.id, ctx.author.id, entries)
+        await ctx.reply(
+            embed=moderator_action_history_embed(ctx.author.id, entries, 0),
+            view=view,
+            mention_author=False,
+        )
         return
     view = ModerationHistoryView(member, ctx.author.id)
     await ctx.reply(embed=moderation_history_embed(member, 0), view=view, mention_author=False)
@@ -2052,7 +2145,7 @@ HELP_PAGES = [
     {
         "title": "<:Logging:1571302754272542852> Logging",
         "description": (
-            "`b!mlogs @user` — View a member's moderation history, three logs per page.\n"
+            "`b!mlogs` — View your own BRAX actions. `b!mlogs @user` — View that member's history. Three logs per page.\n"
             "`b!mlog [#channel]` — Set the moderation log channel. "
             "If no channel is supplied, BRAX uses the channel where you run the command.\n\n"
             "Moderation, blacklist, and Fun actions are recorded with the affected member "
