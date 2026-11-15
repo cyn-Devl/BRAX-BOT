@@ -2512,7 +2512,6 @@ async def buy_command(ctx, item: str, *, details: str = ""):
             await ctx.reply("You already have BRAX Usage or the role is missing.", mention_author=False)
             return
     spend_coins(ctx.guild.id, ctx.author.id, price)
-    add_coins(ctx.guild.id, ctx.author.id, price)
     staff = "<@1521469840970350632> <@1511412885040009309>"
     await ctx.channel.send(
         f"{staff} — {ctx.author.mention} bought a request for **{label}** ({price} {BRAX_COINS_EMOJI}). Please review it.",
@@ -2548,11 +2547,65 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
         add_coins(ctx.guild.id, ctx.author.id, amount * multiplier)
     await ctx.reply((f"You hit {multiplier}x!" if won else f"The {multiplier}x round missed.") + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
 
+STOCK_START_PRICES = {"BRAX": 25, "WISP": 15, "UWU": 10, "TICKET": 40}
+def stock_prices():
+    prices = economy_data.setdefault("market_prices", dict(STOCK_START_PRICES))
+    for symbol, base in STOCK_START_PRICES.items():
+        prices.setdefault(symbol, base)
+    return prices
+
+def move_stock_market():
+    prices = stock_prices()
+    for symbol in prices:
+        prices[symbol] = max(2, int(prices[symbol] * random.uniform(0.92, 1.09)))
+    save_economy()
+
 @bot.command(name="stocks", aliases=["stock"])
 async def stocks_command(ctx):
-    holdings = economy_data.setdefault("stocks", {}).get(economy_key(ctx.guild.id, ctx.author.id), {})
-    listing = ", ".join(f"{name} x{count}" for name, count in holdings.items()) or "No shares yet."
-    await ctx.reply(embed=discord.Embed(title="BRAX Market", description=f"Your simulated portfolio: {listing}\nStock trading features can be added next.", color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
+    move_stock_market()
+    prices = stock_prices()
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    holdings = economy_data.setdefault("stocks", {}).get(key, {})
+    quotes = "\\n".join(f"**{symbol}** — {price} {BRAX_COINS_EMOJI}" for symbol, price in prices.items())
+    portfolio = ", ".join(f"{symbol} × {count}" for symbol, count in holdings.items() if count) or "No shares yet."
+    embed = discord.Embed(title="📈 BRAX Market", description=f"{quotes}\\n\\n**Your shares:** {portfolio}\\nBuy: b!stockbuy BRAX 2\\nSell: b!stocksell BRAX 1", color=discord.Color.from_rgb(58, 48, 35))
+    await ctx.reply(embed=embed, mention_author=False)
+
+@bot.command(name="stockbuy")
+async def stockbuy_command(ctx, symbol: str, shares: int):
+    symbol = symbol.upper()
+    prices = stock_prices()
+    if symbol not in prices or not 1 <= shares <= 100:
+        await ctx.reply("Choose BRAX, WISP, UWU or TICKET, and buy 1–100 shares.", mention_author=False)
+        return
+    move_stock_market()
+    price = stock_prices()[symbol]
+    cost = price * shares
+    if not spend_coins(ctx.guild.id, ctx.author.id, cost):
+        await ctx.reply(f"You need {cost} {BRAX_COINS_EMOJI} to buy those shares.", mention_author=False)
+        return
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    portfolio = economy_data.setdefault("stocks", {}).setdefault(key, {})
+    portfolio[symbol] = int(portfolio.get(symbol, 0)) + shares
+    save_economy()
+    await ctx.reply(f"Bought {shares} {symbol} shares for {cost} {BRAX_COINS_EMOJI}.", mention_author=False)
+
+@bot.command(name="stocksell")
+async def stocksell_command(ctx, symbol: str, shares: int):
+    symbol = symbol.upper()
+    prices = stock_prices()
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    portfolio = economy_data.setdefault("stocks", {}).setdefault(key, {})
+    if symbol not in prices or shares < 1 or int(portfolio.get(symbol, 0)) < shares:
+        await ctx.reply("You don't own that many shares. Check b!stocks.", mention_author=False)
+        return
+    move_stock_market()
+    price = stock_prices()[symbol]
+    portfolio[symbol] = int(portfolio.get(symbol, 0)) - shares
+    proceeds = price * shares
+    add_coins(ctx.guild.id, ctx.author.id, proceeds)
+    save_economy()
+    await ctx.reply(f"Sold {shares} {symbol} shares for {proceeds} {BRAX_COINS_EMOJI}.", mention_author=False)
 
 
 
@@ -2739,5 +2792,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: economy-uwu-upgrade-2026-11-14 | coins-per-10-messages | shop | coinflip | gamble | custom-role | advanced-uwu | full-moderation")
+print("BRAX BUILD: economy-uwu-upgrade-2026-11-14 | coins-per-10-messages | shop | coinflip | gamble | stocks | custom-role | advanced-uwu | full-moderation")
 bot.run(TOKEN)
