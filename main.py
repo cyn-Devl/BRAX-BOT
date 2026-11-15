@@ -96,6 +96,9 @@ economy_data.setdefault("inventories", {})
 economy_data.setdefault("mine_cooldowns", {})
 economy_data.setdefault("trades", {})
 economy_data.setdefault("tokens", {})
+economy_data.setdefault("personal_banks", {})
+economy_data.setdefault("political_power", {})
+economy_data.setdefault("tfhsa_political_power_treasury", {})
 economy_data.setdefault("special_purchases", {})
 economy_data.setdefault("temporary_blacklists", {})
 economy_data.setdefault("protection", {})
@@ -161,6 +164,15 @@ def spend_tokens(guild_id, user_id, amount):
         return False
     set_token_balance(guild_id, user_id, current - amount)
     return True
+
+def personal_bank_for(guild_id, user_id):
+    return economy_data.setdefault("personal_banks", {}).setdefault(economy_key(guild_id, user_id), {"coins": 0, "tokens": 0, "political_power": 0, "items": {}})
+
+
+def parse_bank_asset(value):
+    value = str(value).casefold().replace("-", "").replace("_", "").replace(" ", "")
+    return {"coin":"coins","braxcoins":"coins","token":"tokens","braxtokens":"tokens","pp":"political_power","politicalpower":"political_power","item":"item","items":"item"}.get(value)
+
 
 def special_purchase_key(guild_id, user_id, name):
     return f"{guild_id}:{user_id}:{name}"
@@ -690,6 +702,23 @@ async def tbr_tax_loop():
             treasury = economy_data.setdefault("tfhsa_treasury", {})
             token_treasury = economy_data.setdefault("tfhsa_token_treasury", {})
             treasury_key = str(guild.id)
+            pp_treasury = economy_data.setdefault("tfhsa_political_power_treasury", {})
+            for company in economy_data.setdefault("companies", {}).values():
+                if int(company.get("guild_id", 0)) != guild.id:
+                    continue
+                if "political_power_tax_at" not in company:
+                    company["political_power_tax_at"] = now + 3600
+                    continue
+                if now < float(company.get("political_power_tax_at", now + 3600)):
+                    continue
+                pp_bank = max(0, int(company.get("political_power_bank", 0)))
+                tax_amount = min(pp_bank, int(pp_bank * 0.9525))
+                company["political_power_bank"] = pp_bank - tax_amount
+                pp_treasury[treasury_key] = int(pp_treasury.get(treasury_key, 0)) + tax_amount
+                company["political_power_tax_at"] = now + 3600
+                save_economy()
+                if tax_amount:
+                    await send_agency_webhook(guild, guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID), "TFHSA", f"TFHSA collected **{tax_amount:,} Political Power** from {company.get('name', 'a company')}'s private bank (95.25% hourly tax).")
             collected = tokens_collected = taxed_members = 0
             channel = guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID)
 
@@ -3452,6 +3481,82 @@ def company_for_member(guild_id, user_id):
     return economy_data.setdefault("companies", {}).get(cid) if cid else None
 
 
+@bot.command(name="bank")
+async def personal_bank_command(ctx, action: str, *, details: str = ""):
+    action = action.casefold()
+    bank = personal_bank_for(ctx.guild.id, ctx.author.id)
+    if action in {"balance", "bal", "info"}:
+        lines = [f"BRAX Coins: **\${int(bank.get('coins', 0)):,}**", f"BRAX Tokens: **\${int(bank.get('tokens', 0)):,}**", f"Political Power: **\${int(bank.get('political_power', 0)):,}**"]
+        lines.extend(f"{name}: **\${int(count):,}**" for name, count in bank.setdefault("items", {}).items() if int(count) > 0)
+        await ctx.reply(embed=discord.Embed(title=f"{ctx.author.display_name}'s Personal Bank", description="\\n".join(lines), color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
+        return
+    parts = details.split()
+    if action not in {"deposit", "withdraw"} or len(parts) < 2:
+        await ctx.reply("Use b!bank balance, b!bank deposit <coins|tokens|politicalpower> <amount>, or b!bank withdraw <asset> <amount>. Items: b!bank deposit item <item name> <amount>.", mention_author=False)
+        return
+    asset = parse_bank_asset(parts[0])
+    if asset is None:
+        await ctx.reply("Choose coins, tokens, politicalpower, or item.", mention_author=False)
+        return
+    if asset == "item":
+        if len(parts) < 3:
+            await ctx.reply("Use b!bank deposit item <item name> <amount>.", mention_author=False)
+            return
+        try: amount = int(parts[-1])
+        except ValueError: amount = 0
+        item = normalize_mining_item(" ".join(parts[1:-1]))
+        if item is None or amount < 1:
+            await ctx.reply("Invalid item or amount.", mention_author=False)
+            return
+        inventory = get_inventory(ctx.guild.id, ctx.author.id)
+        stored = bank.setdefault("items", {})
+        source = inventory if action == "deposit" else stored
+        target = stored if action == "deposit" else inventory
+        if int(source.get(item, 0)) < amount:
+            await ctx.reply(f"Not enough {item} available.", mention_author=False)
+            return
+        source[item] = int(source[item]) - amount
+        if source[item] <= 0: source.pop(item, None)
+        target[item] = int(target.get(item, 0)) + amount
+        save_economy()
+        await ctx.reply(f"{action.title()}ed {amount:,} {item} in your personal bank.", mention_author=False)
+        return
+    if len(parts) != 2:
+        await ctx.reply("Provide one asset and one amount.", mention_author=False)
+        return
+    try: amount = int(parts[1])
+    except ValueError: amount = 0
+    if amount < 1:
+        await ctx.reply("Amount must be a positive whole number.", mention_author=False)
+        return
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    wallets = {"coins": economy_data.setdefault("balances", {}), "tokens": economy_data.setdefault("tokens", {}), "political_power": economy_data.setdefault("political_power", {})}
+    wallet = max(0, int(wallets[asset].get(key, 0)))
+    saved = max(0, int(bank.get(asset, 0)))
+    if action == "deposit":
+        if wallet < amount:
+            await ctx.reply(f"You only have {wallet:,} {asset.replace('_', ' ')} in your wallet.", mention_author=False)
+            return
+        wallets[asset][key] = wallet - amount
+        bank[asset] = saved + amount
+    else:
+        if saved < amount:
+            await ctx.reply(f"Your personal bank only has {saved:,} {asset.replace('_', ' ')}.", mention_author=False)
+            return
+        bank[asset] = saved - amount
+        wallets[asset][key] = wallet + amount
+    save_economy()
+    direction = "into" if action == "deposit" else "from"
+    await ctx.reply(f"{action.title()}ed {amount:,} {asset.replace('_', ' ')} {direction} your personal bank. Banked assets are exempt from personal-wallet TBR taxes.", mention_author=False)
+
+
+@bot.command(name="politicalpower")
+async def political_power_command(ctx):
+    bank = personal_bank_for(ctx.guild.id, ctx.author.id)
+    wallet = int(economy_data.setdefault("political_power", {}).get(economy_key(ctx.guild.id, ctx.author.id), 0))
+    await ctx.reply(f"Political Power wallet: **{wallet:,}** | Personal bank: **{int(bank.get('political_power', 0)):,}**", mention_author=False)
+
+
 @bot.command(name="company")
 async def company_command(ctx, action: str, *, details: str = ""):
     action = action.casefold()
@@ -3470,7 +3575,7 @@ async def company_command(ctx, action: str, *, details: str = ""):
             await ctx.reply("Creating a company costs 1,000 BRAX Coins.", mention_author=False)
             return
         cid = company_key(ctx.guild.id, ctx.author.id)
-        companies[cid] = {"guild_id": ctx.guild.id, "owner_id": ctx.author.id, "name": name, "bank": 0, "members": [ctx.author.id]}
+        companies[cid] = {"guild_id": ctx.guild.id, "owner_id": ctx.author.id, "name": name, "bank": 0, "token_bank": 0, "political_power_bank": 0, "political_power_tax_at": time.time() + 3600, "members": [ctx.author.id]}
         memberships[user_key] = cid
         save_economy()
         await ctx.reply(f"Company {name} has been founded! Invite members with b!company invite @member.", mention_author=False)
@@ -3518,30 +3623,38 @@ async def company_command(ctx, action: str, *, details: str = ""):
         save_economy()
         await ctx.reply("You left the company. An owner's company is dissolved when they leave.", mention_author=False)
 
-    elif action == "deposit":
-        try:
-            amount = int(details)
-        except ValueError:
-            amount = 0
-        if company is None or amount < 1 or not spend_coins(ctx.guild.id, ctx.author.id, amount):
-            await ctx.reply("Use b!company deposit <amount> while in a company and have enough coins.", mention_author=False)
+    elif action in {"deposit", "withdraw"}:
+        parts = details.split()
+        asset = parse_bank_asset(parts[0]) if parts else None
+        try: amount = int(parts[1]) if len(parts) == 2 else 0
+        except ValueError: amount = 0
+        if company is None or asset not in {"coins", "tokens", "political_power"} or amount < 1:
+            await ctx.reply("Use b!company deposit <coins|tokens|politicalpower> <amount>.", mention_author=False)
             return
-        company["bank"] = int(company.get("bank", 0)) + amount
-        save_economy()
-        await ctx.reply(f"Deposited {amount:,} coins into {company['name']}.", mention_author=False)
-
-    elif action == "withdraw":
-        try:
-            amount = int(details)
-        except ValueError:
-            amount = 0
-        if company is None or int(company.get("owner_id", 0)) != ctx.author.id or amount < 1 or int(company.get("bank", 0)) < amount:
-            await ctx.reply("Only the owner can withdraw, and the company bank must have enough coins.", mention_author=False)
+        field = {"coins": "bank", "tokens": "token_bank", "political_power": "political_power_bank"}[asset]
+        wallets = {"coins": economy_data.setdefault("balances", {}), "tokens": economy_data.setdefault("tokens", {}), "political_power": economy_data.setdefault("political_power", {})}
+        key = economy_key(ctx.guild.id, ctx.author.id)
+        wallet = max(0, int(wallets[asset].get(key, 0)))
+        saved = max(0, int(company.get(field, 0)))
+        if action == "deposit":
+            if wallet < amount:
+                await ctx.reply(f"You only have {wallet:,} {asset.replace('_', ' ')}.", mention_author=False)
+                return
+            wallets[asset][key] = wallet - amount
+            company[field] = saved + amount
+            save_economy()
+            await ctx.reply(f"Deposited {amount:,} {asset.replace('_', ' ')} into {company['name']}'s company bank.", mention_author=False)
             return
-        company["bank"] = int(company.get("bank", 0)) - amount
-        add_coins(ctx.guild.id, ctx.author.id, amount)
+        if int(company.get("owner_id", 0)) != ctx.author.id:
+            await ctx.reply("Only the company owner can withdraw from the company bank.", mention_author=False)
+            return
+        if saved < amount:
+            await ctx.reply(f"The company bank only has {saved:,} {asset.replace('_', ' ')}.", mention_author=False)
+            return
+        company[field] = saved - amount
+        wallets[asset][key] = wallet + amount
         save_economy()
-        await ctx.reply(f"Withdrew {amount:,} coins from {company['name']}.", mention_author=False)
+        await ctx.reply(f"Withdrew {amount:,} {asset.replace('_', ' ')} from {company['name']}'s company bank.", mention_author=False)
 
     elif action == "info":
         if company is None:
