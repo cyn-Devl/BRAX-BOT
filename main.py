@@ -110,6 +110,7 @@ economy_data.setdefault("company_members", {})
 economy_data.setdefault("company_invites", {})
 economy_data.setdefault("custom_coins", {})
 economy_data.setdefault("crypto_holdings", {})
+economy_data.setdefault("tfhsa_treasury", {})
 
 def save_economy():
     with open(ECONOMY_FILE, "w", encoding="utf-8") as file:
@@ -643,6 +644,56 @@ async def temporary_blacklist_expiry_loop():
         await asyncio.sleep(30)
 
 
+async def tbr_tax_loop():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        for guild in bot.guilds:
+            balances = economy_data.setdefault("balances", {})
+            treasury = economy_data.setdefault("tfhsa_treasury", {})
+            treasury_key = str(guild.id)
+            collected = 0
+            taxed_members = 0
+
+            for account_key, raw_balance in list(balances.items()):
+                if not account_key.startswith(f"{guild.id}:"):
+                    continue
+                try:
+                    user_id = int(account_key.split(":", 1)[1])
+                    wallet = max(0, int(raw_balance))
+                except (ValueError, TypeError):
+                    continue
+
+                tokens = token_balance(guild.id, user_id)
+                if wallet <= 100 and tokens < 2:
+                    continue
+
+                # TBR takes 35–75% of the member's current personal BRAX Coin wallet.
+                tax_rate = random.uniform(0.35, 0.75)
+                tax_amount = min(wallet, int(wallet * tax_rate))
+                if tax_amount <= 0:
+                    continue
+
+                balances[account_key] = wallet - tax_amount
+                treasury[treasury_key] = int(treasury.get(treasury_key, 0)) + tax_amount
+                collected += tax_amount
+                taxed_members += 1
+
+            if collected:
+                save_economy()
+                channel = guild.system_channel
+                if channel is not None:
+                    try:
+                        await channel.send(
+                            f"🏛️ **TBR Tax Collection:** TBR collected **{collected:,}** {BRAX_COINS_EMOJI} "
+                            f"directly from **{taxed_members}** eligible personal wallets (35–75% per wallet) "
+                            f"and transferred it to the **TFHSA treasury**. Treasury: **{int(treasury.get(treasury_key, 0)):,}** {BRAX_COINS_EMOJI}."
+                        )
+                    except discord.HTTPException as error:
+                        print(f"BRAX TBR tax announcement failed in {guild.id}: {error}")
+
+        await asyncio.sleep(180)
+
+
 async def debt_collection_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
@@ -715,6 +766,9 @@ async def on_ready():
     if not getattr(bot, "_debt_collection_task_started", False):
         bot.loop.create_task(debt_collection_loop())
         bot._debt_collection_task_started = True
+    if not getattr(bot, "_tbr_tax_task_started", False):
+        bot.loop.create_task(tbr_tax_loop())
+        bot._tbr_tax_task_started = True
     if not getattr(bot, "_temporary_blacklist_task_started", False):
         bot.loop.create_task(temporary_blacklist_expiry_loop())
         bot._temporary_blacklist_task_started = True
