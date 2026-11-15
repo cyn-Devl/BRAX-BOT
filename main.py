@@ -2341,6 +2341,9 @@ async def untimeout_command(ctx, member: discord.Member, *, reason: str = "Timeo
 async def kick_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await moderation_gate(ctx, "kick_members"):
         return
+    if consume_protection(ctx.guild.id, member.id, "kick"):
+        await ctx.reply(f"{EMOJIS['denied']} {member.mention} is protected from this kick. Charges left: {get_protection(ctx.guild.id, member.id, 'kick')}", mention_author=False)
+        return
     if member.id == ctx.author.id or member.bot:
         await ctx.reply(f"{EMOJIS['denied']} You can't kick yourself or a bot.", mention_author=False)
         return
