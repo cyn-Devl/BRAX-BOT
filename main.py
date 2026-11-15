@@ -3217,12 +3217,13 @@ async def coinflip_command(ctx, side: str, amount: int):
     if side not in {"heads", "tails", "h", "t"} or not 1 <= amount <= MAX_GAMBLE_BET:
         await ctx.reply(f"Use b!coinflip heads 10 or b!coinflip tails 10 (1–{MAX_GAMBLE_BET} coins). {COINFLIP_EMOJI}", mention_author=False)
         return
+    starting_balance = coin_balance(ctx.guild.id, ctx.author.id)
     if not spend_coins(ctx.guild.id, ctx.author.id, amount):
         await ctx.reply("Not enough BRAX Coins.", mention_author=False)
         return
     result = random.choice(["heads", "tails"])
     won = side[0] == result[0]
-    payout_reduction = 0.95 if coin_balance(ctx.guild.id, ctx.author.id) >= 100_000 else (0.40 if coin_balance(ctx.guild.id, ctx.author.id) >= 1_000 else 0.0)
+    payout_reduction = 0.95 if starting_balance >= 100_000 else (0.40 if starting_balance >= 1_000 else 0.0)
     if won:
         gross_payout = amount * 2
         payout = int(gross_payout * (1 - payout_reduction))
