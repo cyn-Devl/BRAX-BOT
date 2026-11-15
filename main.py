@@ -87,7 +87,7 @@ UWU_AUTHORIZED_IDS = {1511412885040009309, 1521469840970350632}
 BRAX_COINS_EMOJI = "<:Braxcoins:1571355479278485624>"
 COINFLIP_EMOJI = "<a:Coinflip:1571355371086422166>"
 ECONOMY_FILE = "brax_economy.json"
-MAX_GAMBLE_BET = 250
+MAX_GAMBLE_MULTIPLIER = 30
 try:
     with open(ECONOMY_FILE, "r", encoding="utf-8") as file:
         economy_data = json.load(file)
@@ -105,7 +105,7 @@ def coin_balance(guild_id, user_id):
     return int(economy_data.setdefault("balances", {}).get(economy_key(guild_id, user_id), 0))
 
 def set_coin_balance(guild_id, user_id, amount):
-    economy_data.setdefault("balances", {})[economy_key(guild_id, user_id)] = max(0, int(amount))
+    economy_data.setdefault("balances", {})[economy_key(guild_id, user_id)] = int(amount)
     save_economy()
 
 def add_coins(guild_id, user_id, amount):
@@ -2536,16 +2536,56 @@ async def coinflip_command(ctx, side: str, amount: int):
 
 @bot.command(name="gamble")
 async def gamble_command(ctx, amount: int, multiplier: int = 2):
-    if multiplier not in {2, 6} or not 1 <= amount <= MAX_GAMBLE_BET:
-        await ctx.reply(f"Use b!gamble 20 2 or b!gamble 20 6. Bets are capped at {MAX_GAMBLE_BET} virtual coins.", mention_author=False)
+    if not (is_high_staff(ctx.author) or has_lesser_usage(ctx.author)):
+        await ctx.reply("You need BRAX Usage or Lesser BRAX Usage to gamble.", mention_author=False)
         return
-    if not spend_coins(ctx.guild.id, ctx.author.id, amount):
-        await ctx.reply("Not enough BRAX Coins.", mention_author=False)
+    if amount < 1 or multiplier < 2 or multiplier > MAX_GAMBLE_MULTIPLIER:
+        await ctx.reply(f"Use b!gamble <amount> <multiplier>. Multipliers range from 2x to {MAX_GAMBLE_MULTIPLIER}x. Example: b!gamble 100 15", mention_author=False)
         return
-    won = random.random() < (0.5 if multiplier == 2 else 1 / 6)
+    balance = coin_balance(ctx.guild.id, ctx.author.id)
+    if multiplier <= 10 and balance < amount:
+        await ctx.reply(f"Not enough BRAX Coins. Your balance is {balance} {BRAX_COINS_EMOJI}. Bets above 10x can put you in debt.", mention_author=False)
+        return
+    # Higher multipliers are riskier. A win chance of 1/multiplier keeps the payout odds aligned.
+    won = random.randrange(multiplier) == 0
+    set_coin_balance(ctx.guild.id, ctx.author.id, balance - amount)
     if won:
         add_coins(ctx.guild.id, ctx.author.id, amount * multiplier)
-    await ctx.reply((f"You hit {multiplier}x!" if won else f"The {multiplier}x round missed.") + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
+    new_balance = coin_balance(ctx.guild.id, ctx.author.id)
+    debt_note = " You are now in debt." if new_balance < 0 else ""
+    await ctx.reply(
+        (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount}** coin bet at **{multiplier}x**.")
+        + f" Balance: **{new_balance}** {BRAX_COINS_EMOJI}.{debt_note}",
+        mention_author=False,
+    )
+
+@bot.command(name="coinlb", aliases=["coinleaderboard", "leaderboard", "richlist"])
+async def coin_leaderboard_command(ctx):
+    prefix = f"{ctx.guild.id}:"
+    entries = []
+    for key, balance in economy_data.setdefault("balances", {}).items():
+        if key.startswith(prefix):
+            try:
+                user_id = int(key.split(":", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            entries.append((user_id, int(balance)))
+    entries.sort(key=lambda item: item[1], reverse=True)
+    entries = entries[:10]
+    if not entries:
+        await ctx.reply("Nobody has earned any BRAX Coins yet.", mention_author=False)
+        return
+    rows = []
+    for rank, (user_id, balance) in enumerate(entries, start=1):
+        member = ctx.guild.get_member(user_id)
+        name = member.display_name if member else f"User {user_id}"
+        rows.append(f"**{rank}.** {name} — **{balance:,}** {BRAX_COINS_EMOJI}")
+    embed = discord.Embed(
+        title=f"{BRAX_COINS_EMOJI} BRAX Coin Leaderboard",
+        description="\\n".join(rows),
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    await ctx.reply(embed=embed, mention_author=False)
 
 STOCK_START_PRICES = {"BRAX": 25, "WISP": 15, "UWU": 10, "TICKET": 40}
 def stock_prices():
@@ -2677,7 +2717,8 @@ HELP_PAGES = [
             "Messages are relayed through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n"
             "`b!balance [@user]` — Check coins. `b!shop` / `b!store` — View the store. "
             "`b!buy` — Purchase store items.\n"
-            "`b!coinflip heads|tails <amount>` and `b!gamble <amount> <2|6>` — Play coin games.\n"
+            "`b!coinflip heads|tails <amount>` and `b!gamble <amount> <2-30>` — Play coin games.\n"
+            "`b!coinlb` — View the BRAX Coin leaderboard.\n"
             "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n\n"
             "UWU lock requires BRAX Usage and Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
@@ -2751,7 +2792,7 @@ async def brax_help_command(ctx):
     if has_lesser_usage(ctx.author):
         fun_page = discord.Embed(
             title="<:Fun:1571324174394200085> Fun",
-            description="b!mweute @user — Fake mute a member for fun. This does not apply a real timeout.",
+            description="b!mweute @user — Fake mute for fun.\nb!gamble <amount> <2-30> — Gamble BRAX Coins (can go into debt above 10x).\nb!balance — Check your wallet.\nb!coinlb — View the BRAX Coin leaderboard.\nb!shop — View the store.",
             color=discord.Color.from_rgb(58, 48, 35),
         )
         fun_page.set_footer(text="BRAX • Lesser B Usage • Fun Only")
@@ -2784,7 +2825,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
     embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
     embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!lusageadd @user, b!help, /help", inline=False)
-    embed.add_field(name="Fun & Economy", value="b!mweute, b!uwu, b!balance, b!shop, b!store, b!buy, b!coinflip, b!gamble, b!stocks", inline=False)
+    embed.add_field(name="Fun & Economy", value="b!mweute, b!uwu, b!balance, b!shop, b!store, b!buy, b!coinflip, b!gamble (2x–30x), b!coinlb, b!stocks", inline=False)
     embed.set_footer(text="BRAX • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -2795,5 +2836,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: economy-uwu-upgrade-2026-11-14 | coins-per-10-messages | shop | coinflip | gamble | stocks | custom-role | advanced-uwu | full-moderation")
+print("BRAX BUILD: economy-uwu-upgrade-2026-11-14 | coins-per-10-messages | shop | coinflip | gamble-30x-debt | coin-leaderboard | stocks | custom-role | advanced-uwu | full-moderation")
 bot.run(TOKEN)
