@@ -116,6 +116,10 @@ economy_data.setdefault("custom_coins", {})
 economy_data.setdefault("crypto_holdings", {})
 economy_data.setdefault("tfhsa_treasury", {})
 economy_data.setdefault("gamble_fraud_until", {})
+economy_data.setdefault("tfhsa_token_treasury", {})
+economy_data.setdefault("tax_event_history", {})
+economy_data.setdefault("fbi_tax_strikes", {})
+economy_data.setdefault("job_banned", {})
 
 def save_economy():
     with open(ECONOMY_FILE, "w", encoding="utf-8") as file:
@@ -677,18 +681,16 @@ async def send_agency_webhook(guild, channel, agency, content):
 
 async def tbr_tax_loop():
     await bot.wait_until_ready()
-    # Each account has its own tax schedule. High-balance/high-token accounts
-    # are checked every 5 seconds; everyone else stays on the 3-minute cycle.
     next_tax_at = {}
-
     while not bot.is_closed():
         now = time.time()
         for guild in bot.guilds:
             balances = economy_data.setdefault("balances", {})
+            tokens_data = economy_data.setdefault("tokens", {})
             treasury = economy_data.setdefault("tfhsa_treasury", {})
+            token_treasury = economy_data.setdefault("tfhsa_token_treasury", {})
             treasury_key = str(guild.id)
-            collected = 0
-            taxed_members = 0
+            collected = tokens_collected = taxed_members = 0
             channel = guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID)
 
             for account_key, raw_balance in list(balances.items()):
@@ -701,58 +703,91 @@ async def tbr_tax_loop():
                 except (ValueError, TypeError):
                     continue
 
-                # More than 500,000 coins OR more than 500 Brax Tokens
-                # moves this account to a 5-second tax cooldown.
-                interval = 5 if (wallet > 500_000 or tokens > 500) else 180
+                interval = 5 if (wallet > 500_000 or tokens >= 30) else 180
                 schedule = next_tax_at.get(account_key)
                 if schedule is None or schedule[0] != interval:
                     next_tax_at[account_key] = (interval, now)
                     schedule = next_tax_at[account_key]
-
                 if now < schedule[1]:
                     continue
                 next_tax_at[account_key] = (interval, now + interval)
 
-                # Tax is based only on the member's personal BRAX Coin wallet.
-                if wallet < 100:
-                    continue
-                if wallet <= 10_000:
-                    tax_rate = random.uniform(0.15, 0.45)
-                elif wallet < 100_000:
-                    tax_rate = random.uniform(0.35, 0.45)
-                else:
-                    tax_rate = random.uniform(0.45, 0.75)
+                coin_tax = token_tax = 0
+                coin_rate = token_rate = 0.0
+                if wallet >= 100:
+                    if wallet <= 10_000:
+                        coin_rate = random.uniform(0.15, 0.45)
+                    elif wallet < 100_000:
+                        coin_rate = random.uniform(0.35, 0.45)
+                    else:
+                        coin_rate = random.uniform(0.45, 0.75)
+                    coin_tax = min(wallet, int(wallet * coin_rate))
+                    if coin_tax:
+                        balances[account_key] = wallet - coin_tax
+                        treasury[treasury_key] = int(treasury.get(treasury_key, 0)) + coin_tax
+                        collected += coin_tax
 
-                tax_amount = min(wallet, int(wallet * tax_rate))
-                if tax_amount <= 0:
-                    continue
+                if tokens >= 30:
+                    token_rate = random.uniform(0.30, 0.50)
+                    token_tax = min(tokens, max(1, int(tokens * token_rate)))
+                    tokens_data[account_key] = tokens - token_tax
+                    token_treasury[treasury_key] = int(token_treasury.get(treasury_key, 0)) + token_tax
+                    tokens_collected += token_tax
 
-                balances[account_key] = wallet - tax_amount
-                treasury[treasury_key] = int(treasury.get(treasury_key, 0)) + tax_amount
-                collected += tax_amount
+                if coin_tax <= 0 and token_tax <= 0:
+                    continue
                 taxed_members += 1
-                percentage = tax_rate * 100
+                save_economy()
+
+                notices = []
+                if coin_tax:
+                    notices.append(f"**{coin_tax:,}** {BRAX_COINS_EMOJI} ({coin_rate * 100:.2f}%)")
+                if token_tax:
+                    notices.append(f"**{token_tax:,}** BRAX Tokens ({token_rate * 100:.2f}%)")
                 await send_agency_webhook(
-                    guild,
-                    channel,
-                    "TBR",
-                    f"Yo <@{user_id}>! We taxed you **{percentage:.2f}%** and collected "
-                    f"**{tax_amount:,}** {BRAX_COINS_EMOJI} from your personal wallet. "
-                    f"Thanks for the money — it's going into the jobs fund!",
+                    guild, channel, "TBR",
+                    f"Yo <@{user_id}>! TBR collected {' and '.join(notices)} from your personal wallet. "
+                    "The funds are going into the jobs fund!",
                 )
 
-            if collected:
+                history = economy_data.setdefault("tax_event_history", {})
+                recent = [float(stamp) for stamp in history.get(account_key, []) if now - float(stamp) < 60]
+                recent.append(now)
+                history[account_key] = recent
+                if len(recent) >= 3:
+                    strikes = economy_data.setdefault("fbi_tax_strikes", {})
+                    strike = int(strikes.get(account_key, 0)) + 1
+                    strikes[account_key] = strike
+                    history[account_key] = []
+                    if strike == 1:
+                        economy_data.setdefault("jail_until", {})[account_key] = now + 60
+                        await send_agency_webhook(
+                            guild, channel, "FBI",
+                            f"⚠️ FBI WARNING: <@{user_id}> triggered repeated tax events. "
+                            "First warning: 60 seconds in jail for gambling fraud.",
+                        )
+                    else:
+                        balances[account_key] = 0
+                        tokens_data[account_key] = 0
+                        economy_data.setdefault("job_banned", {})[account_key] = True
+                        economy_data.setdefault("jobs", {}).pop(account_key, None)
+                        economy_data.setdefault("jail_until", {})[account_key] = now + 60
+                        await send_agency_webhook(
+                            guild, channel, "FBI",
+                            f"🚨 FBI FINAL ACTION: <@{user_id}> repeated the tax-fraud offense. "
+                            "Their BRAX Coin and BRAX Token balances are wiped, and they are permanently banned from jobs.",
+                        )
+                    save_economy()
+
+            if collected or tokens_collected:
                 save_economy()
                 await send_agency_webhook(
-                    guild,
-                    channel,
-                    "TBR",
+                    guild, channel, "TBR",
                     f"Tax cycle complete: collected **{collected:,}** {BRAX_COINS_EMOJI} "
-                    f"from **{taxed_members}** personal wallets. The funds have been transferred "
-                    f"to the TFHSA treasury for the jobs fund. Treasury balance: "
-                    f"**{int(treasury.get(treasury_key, 0)):,}** {BRAX_COINS_EMOJI}.",
+                    f"and **{tokens_collected:,}** BRAX Tokens from **{taxed_members}** personal wallets. "
+                    f"TFHSA treasury: **{int(treasury.get(treasury_key, 0)):,}** {BRAX_COINS_EMOJI}; "
+                    f"token treasury: **{int(token_treasury.get(treasury_key, 0)):,}** tokens.",
                 )
-
         await asyncio.sleep(1)
 
 
@@ -3309,6 +3344,9 @@ async def jobs_command(ctx):
 async def job_command(ctx, action: str, *, job_name: str = ""):
     key = economy_key(ctx.guild.id, ctx.author.id)
     if action.casefold() == "join":
+        if economy_data.setdefault("job_banned", {}).get(key):
+            await ctx.reply("🚫 You are permanently banned from BRAX jobs by the FBI.", mention_author=False)
+            return
         name = job_name.casefold().strip()
         if name not in JOB_DEFINITIONS:
             await ctx.reply("That job doesn't exist. Use b!jobs to see the list.", mention_author=False)
@@ -3381,6 +3419,9 @@ async def crime_command(ctx):
 @bot.command(name="work")
 async def work_command(ctx):
     key = economy_key(ctx.guild.id, ctx.author.id)
+    if economy_data.setdefault("job_banned", {}).get(key):
+        await ctx.reply("🚫 You are permanently banned from BRAX jobs by the FBI.", mention_author=False)
+        return
     job = economy_data.setdefault("jobs", {}).get(key)
     if job not in JOB_DEFINITIONS:
         await ctx.reply("Get a job first with b!jobs and b!job join <name>.", mention_author=False)
@@ -4093,5 +4134,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation | sell-inventory-confirmed-2026-11-15")
+print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation | sell-inventory-confirmed-2026-11-15 | token-tax-fbi-two-strikes-2026-11-15")
 bot.run(TOKEN)
