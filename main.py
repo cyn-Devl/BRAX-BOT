@@ -2674,8 +2674,11 @@ HELP_PAGES = [
         "description": (
             "`b!mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n"
             "`b!uwu @user` — Toggle advanced UWU lock with randomized stutters, word swaps and endings. "
-            "through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n"
-            "`b!balance [@user]`, `b!shop`, `b!store`, `b!buy`, `b!coinflip`, `b!gamble`, `b!stocks` — BRAX Coins and fun games.\n\n"
+            "Messages are relayed through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n"
+            "`b!balance [@user]` — Check coins. `b!shop` / `b!store` — View the store. "
+            "`b!buy` — Purchase store items.\n"
+            "`b!coinflip heads|tails <amount>` and `b!gamble <amount> <2|6>` — Play coin games.\n"
+            "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n\n"
             "UWU lock requires BRAX Usage and Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
         ),
