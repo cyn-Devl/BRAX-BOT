@@ -947,7 +947,7 @@ uwu_webhooks = {}
 
 def uwuify_text(value):
     value = str(value or "")
-    value = re.sub(r"\bhi\b", "h-h~hi", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bhi\b", "h-h~hi senpai's", value, flags=re.IGNORECASE)
     value = re.sub(r"\bhello\b", "hewwo", value, flags=re.IGNORECASE)
     value = re.sub(r"[rl]", "w", value, flags=re.IGNORECASE)
     value = re.sub(r"n([aeiou])", r"ny\1", value, flags=re.IGNORECASE)
@@ -1738,6 +1738,9 @@ async def fake_mute_command(ctx, member: discord.Member):
 async def uwu_command(ctx, member: discord.Member):
     if not await moderation_gate(ctx, "manage_messages"):
         return
+    if not ctx.guild.me.guild_permissions.manage_messages:
+        await ctx.reply(f"{EMOJIS['denied']} BRAX needs Manage Messages to replace locked members' original messages.", mention_author=False)
+        return
     if member.bot:
         await ctx.reply(f"{EMOJIS['denied']} Choose a human server member.", mention_author=False)
         return
@@ -1966,6 +1969,10 @@ async def usage_add_command(ctx, member: discord.Member):
         f"{EMOJIS['confirmed']} {ctx.author.mention} gave {member.mention} <@&{BRAX_USAGE_ROLE_ID}>.",
         mention_author=False,
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
+    await log_brax_action(
+        ctx.guild, member, ctx.author, "BRAX Usage Granted",
+        "BRAX Usage access granted with b!usageadd",
     )
 
 
