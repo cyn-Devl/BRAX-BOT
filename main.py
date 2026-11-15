@@ -677,7 +677,12 @@ async def send_agency_webhook(guild, channel, agency, content):
 
 async def tbr_tax_loop():
     await bot.wait_until_ready()
+    # Each account has its own tax schedule. High-balance/high-token accounts
+    # are checked every 5 seconds; everyone else stays on the 3-minute cycle.
+    next_tax_at = {}
+
     while not bot.is_closed():
+        now = time.time()
         for guild in bot.guilds:
             balances = economy_data.setdefault("balances", {})
             treasury = economy_data.setdefault("tfhsa_treasury", {})
@@ -692,8 +697,21 @@ async def tbr_tax_loop():
                 try:
                     user_id = int(account_key.split(":", 1)[1])
                     wallet = max(0, int(raw_balance))
+                    tokens = token_balance(guild.id, user_id)
                 except (ValueError, TypeError):
                     continue
+
+                # More than 500,000 coins OR more than 500 Brax Tokens
+                # moves this account to a 5-second tax cooldown.
+                interval = 5 if (wallet > 500_000 or tokens > 500) else 180
+                schedule = next_tax_at.get(account_key)
+                if schedule is None or schedule[0] != interval:
+                    next_tax_at[account_key] = (interval, now)
+                    schedule = next_tax_at[account_key]
+
+                if now < schedule[1]:
+                    continue
+                next_tax_at[account_key] = (interval, now + interval)
 
                 # Tax is based only on the member's personal BRAX Coin wallet.
                 if wallet < 100:
@@ -735,7 +753,7 @@ async def tbr_tax_loop():
                     f"**{int(treasury.get(treasury_key, 0)):,}** {BRAX_COINS_EMOJI}.",
                 )
 
-        await asyncio.sleep(180)
+        await asyncio.sleep(1)
 
 
 async def debt_collection_loop():
