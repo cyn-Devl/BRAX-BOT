@@ -122,6 +122,8 @@ economy_data.setdefault("gamble_fraud_until", {})
 economy_data.setdefault("tfhsa_token_treasury", {})
 economy_data.setdefault("tax_event_history", {})
 economy_data.setdefault("fbi_tax_strikes", {})
+economy_data.setdefault("pending_tax_bills", {})
+economy_data.setdefault("next_personal_tax_at", {})
 economy_data.setdefault("job_banned", {})
 
 def save_economy():
@@ -691,18 +693,75 @@ async def send_agency_webhook(guild, channel, agency, content):
             return False
 
 
+@bot.command(name="pay")
+async def pay_tax_command(ctx, asset_or_amount: str, amount: int = None):
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    bills = economy_data.setdefault("pending_tax_bills", {})
+    bill = bills.get(key)
+    if not bill:
+        await ctx.reply("You don't have an outstanding personal tax bill.", mention_author=False)
+        return
+    if amount is None:
+        asset = "coins"
+        try:
+            payment = int(asset_or_amount)
+        except ValueError:
+            await ctx.reply("Use b!pay <coin amount> or b!pay tokens <amount>.", mention_author=False)
+            return
+    else:
+        if asset_or_amount.casefold() not in {"token", "tokens"}:
+            await ctx.reply("Use b!pay <coin amount> or b!pay tokens <amount>.", mention_author=False)
+            return
+        asset = "tokens"
+        payment = amount
+    if payment < 1:
+        await ctx.reply("Payment must be a positive whole number.", mention_author=False)
+        return
+    due_field = "coins_due" if asset == "coins" else "tokens_due"
+    due = max(0, int(bill.get(due_field, 0)))
+    wallet = coin_balance(ctx.guild.id, ctx.author.id) if asset == "coins" else token_balance(ctx.guild.id, ctx.author.id)
+    if due <= 0:
+        await ctx.reply(f"You don't owe any {asset} on this tax bill.", mention_author=False)
+        return
+    if payment > due:
+        await ctx.reply(f"You only owe {due:,} {asset}.", mention_author=False)
+        return
+    if payment > wallet:
+        await ctx.reply(f"You only have {wallet:,} {asset} in your wallet. Banked assets cannot be used for tax payments.", mention_author=False)
+        return
+    if asset == "coins":
+        set_coin_balance(ctx.guild.id, ctx.author.id, wallet - payment)
+        treasury = economy_data.setdefault("tfhsa_treasury", {})
+    else:
+        set_token_balance(ctx.guild.id, ctx.author.id, wallet - payment)
+        treasury = economy_data.setdefault("tfhsa_token_treasury", {})
+    treasury[str(ctx.guild.id)] = int(treasury.get(str(ctx.guild.id), 0)) + payment
+    bill[due_field] = due - payment
+    remaining_coins = max(0, int(bill.get("coins_due", 0)))
+    remaining_tokens = max(0, int(bill.get("tokens_due", 0)))
+    if remaining_coins == 0 and remaining_tokens == 0:
+        bills.pop(key, None)
+    save_economy()
+    if remaining_coins == 0 and remaining_tokens == 0:
+        await ctx.reply(f"FBI tax bill fully paid. {payment:,} {asset} received. You're clear until the next bill.", mention_author=False)
+    else:
+        await ctx.reply(f"FBI received {payment:,} {asset}. Remaining bill: {remaining_coins:,} BRAX Coins and {remaining_tokens:,} BRAX Tokens.", mention_author=False)
+
+
 async def tbr_tax_loop():
     await bot.wait_until_ready()
-    next_tax_at = {}
     while not bot.is_closed():
         now = time.time()
         for guild in bot.guilds:
             balances = economy_data.setdefault("balances", {})
             tokens_data = economy_data.setdefault("tokens", {})
-            treasury = economy_data.setdefault("tfhsa_treasury", {})
+            coin_treasury = economy_data.setdefault("tfhsa_treasury", {})
             token_treasury = economy_data.setdefault("tfhsa_token_treasury", {})
             treasury_key = str(guild.id)
             pp_treasury = economy_data.setdefault("tfhsa_political_power_treasury", {})
+            channel = guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID)
+
+            # Company Political Power tax remains separate from personal wallet tax bills.
             for company in economy_data.setdefault("companies", {}).values():
                 if int(company.get("guild_id", 0)) != guild.id:
                     continue
@@ -718,100 +777,102 @@ async def tbr_tax_loop():
                 company["political_power_tax_at"] = now + 3600
                 save_economy()
                 if tax_amount:
-                    await send_agency_webhook(guild, guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID), "TFHSA", f"TFHSA collected **{tax_amount:,} Political Power** from {company.get('name', 'a company')}'s private bank (95.25% hourly tax).")
-            collected = tokens_collected = taxed_members = 0
-            channel = guild.system_channel or guild.get_channel(GENERAL_CHANNEL_ID)
+                    await send_agency_webhook(guild, channel, "TFHSA", f"TFHSA collected {tax_amount:,} Political Power from {company.get('name', 'a company')}'s private bank (95.25% hourly tax).")
 
+            # Issue a new personal bill every 3 minutes, but never stack bills.
             for account_key in list(set(balances) | set(tokens_data)):
                 if not account_key.startswith(f"{guild.id}:"):
                     continue
                 try:
                     user_id = int(account_key.split(":", 1)[1])
                     wallet = max(0, int(balances.get(account_key, 0)))
-                    tokens = token_balance(guild.id, user_id)
+                    tokens = max(0, int(tokens_data.get(account_key, 0)))
                 except (ValueError, TypeError):
                     continue
+                bill = economy_data.setdefault("pending_tax_bills", {}).get(account_key)
 
-                interval = 5 if (wallet > 500_000 or tokens >= 30) else 180
-                schedule = next_tax_at.get(account_key)
-                if schedule is None or schedule[0] != interval:
-                    next_tax_at[account_key] = (interval, now)
-                    schedule = next_tax_at[account_key]
-                if now < schedule[1]:
+                # Apply the overdue penalty once. The debt itself remains outstanding.
+                if bill and not bill.get("penalized") and now >= float(bill.get("deadline", 0)):
+                    coin_penalty_rate = random.uniform(0.85, 1.00)
+                    token_penalty_rate = random.uniform(0.85, 1.00)
+                    coin_penalty = min(wallet, int(wallet * coin_penalty_rate))
+                    token_penalty = min(tokens, int(tokens * token_penalty_rate))
+                    balances[account_key] = wallet - coin_penalty
+                    tokens_data[account_key] = tokens - token_penalty
+                    coin_treasury[treasury_key] = int(coin_treasury.get(treasury_key, 0)) + coin_penalty
+                    token_treasury[treasury_key] = int(token_treasury.get(treasury_key, 0)) + token_penalty
+                    bill["penalized"] = True
+                    bill["penalty_coins"] = coin_penalty
+                    bill["penalty_tokens"] = token_penalty
+                    strikes = economy_data.setdefault("fbi_tax_strikes", {})
+                    strike = int(strikes.get(account_key, 0)) + 1
+                    strikes[account_key] = strike
+                    notice = (
+                        f"FBI TAX ENFORCEMENT: <@{user_id}> missed their tax deadline. "
+                        f"FBI seized {coin_penalty:,} BRAX Coins ({coin_penalty_rate * 100:.0f}%) "
+                        f"and {token_penalty:,} BRAX Tokens ({token_penalty_rate * 100:.0f}%). "
+                        f"The unpaid bill remains due: {int(bill.get('coins_due', 0)):,} Coins "
+                        f"and {int(bill.get('tokens_due', 0)):,} Tokens."
+                    )
+                    if strike == 1:
+                        economy_data.setdefault("jail_until", {})[account_key] = now + 60
+                        notice += " First missed bill: 60-second FBI detention."
+                    else:
+                        balances[account_key] = 0
+                        tokens_data[account_key] = 0
+                        economy_data.setdefault("job_banned", {})[account_key] = True
+                        economy_data.setdefault("jobs", {}).pop(account_key, None)
+                        notice += " Repeat offense: remaining wallet balances wiped and permanently banned from jobs."
+                    save_economy()
+                    await send_agency_webhook(guild, channel, "FBI", notice)
                     continue
-                next_tax_at[account_key] = (interval, now + interval)
+
+                # An outstanding bill blocks new bills until it is fully paid.
+                if bill:
+                    continue
+                next_due = float(economy_data.setdefault("next_personal_tax_at", {}).get(account_key, 0))
+                if now < next_due:
+                    continue
 
                 coin_tax = token_tax = 0
                 coin_rate = token_rate = 0.0
                 if wallet >= 100:
                     if wallet <= 10_000:
                         coin_rate = random.uniform(0.15, 0.45)
-                    elif wallet < 100_000:
+                    elif wallet <= 99_999:
                         coin_rate = random.uniform(0.35, 0.45)
                     else:
                         coin_rate = random.uniform(0.45, 0.75)
-                    coin_tax = min(wallet, int(wallet * coin_rate))
-                    if coin_tax:
-                        balances[account_key] = wallet - coin_tax
-                        treasury[treasury_key] = int(treasury.get(treasury_key, 0)) + coin_tax
-                        collected += coin_tax
-
+                    coin_tax = min(wallet, max(1, int(wallet * coin_rate)))
                 if tokens >= 30:
                     token_rate = random.uniform(0.30, 0.50)
                     token_tax = min(tokens, max(1, int(tokens * token_rate)))
-                    tokens_data[account_key] = tokens - token_tax
-                    token_treasury[treasury_key] = int(token_treasury.get(treasury_key, 0)) + token_tax
-                    tokens_collected += token_tax
-
                 if coin_tax <= 0 and token_tax <= 0:
+                    economy_data["next_personal_tax_at"][account_key] = now + 180
                     continue
-                taxed_members += 1
-                save_economy()
 
-                notices = []
+                deadline = now + random.randint(60, 180)
+                bill = {
+                    "guild_id": guild.id, "user_id": user_id,
+                    "channel_id": channel.id if channel else 0,
+                    "coins_due": coin_tax, "tokens_due": token_tax,
+                    "created_at": now, "deadline": deadline, "penalized": False,
+                }
+                economy_data["pending_tax_bills"][account_key] = bill
+                economy_data["next_personal_tax_at"][account_key] = now + 180
+                save_economy()
+                parts = []
                 if coin_tax:
-                    notices.append(f"**{coin_tax:,}** {BRAX_COINS_EMOJI} ({coin_rate * 100:.2f}%)")
+                    parts.append(f"{coin_tax:,} BRAX Coins ({coin_rate * 100:.2f}%)")
                 if token_tax:
-                    notices.append(f"**{token_tax:,}** BRAX Tokens ({token_rate * 100:.2f}%)")
-                # Individual tax notices are omitted to prevent webhook spam; cycle totals are reported below.
-
-                history = economy_data.setdefault("tax_event_history", {})
-                recent = [float(stamp) for stamp in history.get(account_key, []) if now - float(stamp) < 60]
-                recent.append(now)
-                history[account_key] = recent
-                if len(recent) >= 3:
-                    strikes = economy_data.setdefault("fbi_tax_strikes", {})
-                    strike = int(strikes.get(account_key, 0)) + 1
-                    strikes[account_key] = strike
-                    history[account_key] = []
-                    if strike == 1:
-                        economy_data.setdefault("jail_until", {})[account_key] = now + 60
-                        await send_agency_webhook(
-                            guild, channel, "TFHSA",
-                            f"⚠️ TFHSA WARNING: <@{user_id}> triggered repeated tax events. "
-                            "First warning: 60 seconds in jail for gambling fraud.",
-                        )
-                    else:
-                        balances[account_key] = 0
-                        tokens_data[account_key] = 0
-                        economy_data.setdefault("job_banned", {})[account_key] = True
-                        economy_data.setdefault("jobs", {}).pop(account_key, None)
-                        economy_data.setdefault("jail_until", {})[account_key] = now + 60
-                        await send_agency_webhook(
-                            guild, channel, "TFHSA",
-                            f"🚨 TFHSA FINAL ACTION: <@{user_id}> repeated the tax-fraud offense. "
-                            "Their BRAX Coin and BRAX Token balances are wiped, and they are permanently banned from jobs.",
-                        )
-                    save_economy()
-
-            if collected or tokens_collected:
-                save_economy()
+                    parts.append(f"{token_tax:,} BRAX Tokens ({token_rate * 100:.2f}%)")
                 await send_agency_webhook(
-                    guild, channel, "TBR",
-                    f"Tax cycle complete: collected **{collected:,}** {BRAX_COINS_EMOJI} "
-                    f"and **{tokens_collected:,}** BRAX Tokens from **{taxed_members}** personal wallets. "
-                    f"TFHSA treasury: **{int(treasury.get(treasury_key, 0)):,}** {BRAX_COINS_EMOJI}; "
-                    f"token treasury: **{int(token_treasury.get(treasury_key, 0)):,}** tokens.",
+                    guild, channel, "FBI",
+                    f"FBI TAX BILL — PAYMENT REQUIRED\n<@{user_id}>, you owe "
+                    + " and ".join(parts)
+                    + f". Pay within {int(deadline - now)} seconds using b!pay <coin amount> "
+                    f"or b!pay tokens <amount>. If unpaid, FBI seizes 85–100% of your wallet "
+                    "Coins and Tokens. The original bill will still have to be paid.",
                 )
         await asyncio.sleep(1)
 
@@ -4247,5 +4308,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation | sell-inventory-confirmed-2026-11-15 | token-tax-fbi-two-strikes-2026-11-15")
+print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation | sell-inventory-confirmed-2026-11-15 | random-tax-bills-1to3min-fbi-2026-11-15")
 bot.run(TOKEN)
