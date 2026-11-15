@@ -4,6 +4,7 @@ import asyncio
 import re
 import time
 import io
+import random
 from collections import OrderedDict, deque
 from datetime import timedelta
 
@@ -82,6 +83,53 @@ BRAX_USAGE_ROLE_ID = 1571309152440025190
 
 LESSER_BRAX_USAGE_ROLE_ID = 1571343801149296660
 UWU_AUTHORIZED_IDS = {1511412885040009309, 1521469840970350632}
+
+BRAX_COINS_EMOJI = "<:Braxcoins:1571355479278485624>"
+COINFLIP_EMOJI = "<a:Coinflip:1571355371086422166>"
+ECONOMY_FILE = "brax_economy.json"
+MAX_GAMBLE_BET = 250
+try:
+    with open(ECONOMY_FILE, "r", encoding="utf-8") as file:
+        economy_data = json.load(file)
+except (OSError, json.JSONDecodeError):
+    economy_data = {"balances": {}, "message_counts": {}, "stocks": {}}
+
+def save_economy():
+    with open(ECONOMY_FILE, "w", encoding="utf-8") as file:
+        json.dump(economy_data, file, ensure_ascii=False, indent=2)
+
+def economy_key(guild_id, user_id):
+    return f"{guild_id}:{user_id}"
+
+def coin_balance(guild_id, user_id):
+    return int(economy_data.setdefault("balances", {}).get(economy_key(guild_id, user_id), 0))
+
+def set_coin_balance(guild_id, user_id, amount):
+    economy_data.setdefault("balances", {})[economy_key(guild_id, user_id)] = max(0, int(amount))
+    save_economy()
+
+def add_coins(guild_id, user_id, amount):
+    set_coin_balance(guild_id, user_id, coin_balance(guild_id, user_id) + int(amount))
+
+def spend_coins(guild_id, user_id, amount):
+    balance = coin_balance(guild_id, user_id)
+    if amount < 0 or balance < amount:
+        return False
+    set_coin_balance(guild_id, user_id, balance - amount)
+    return True
+
+def award_message_coin(message):
+    key = economy_key(message.guild.id, message.author.id)
+    counts = economy_data.setdefault("message_counts", {})
+    old_count = int(counts.get(key, 0))
+    new_count = old_count + 1
+    counts[key] = new_count
+    save_economy()
+    if new_count // 10 > old_count // 10:
+        add_coins(message.guild.id, message.author.id, 1)
+        return 1
+    return 0
+
 LESSER_USAGE_STATE_FILE = "lesser_usage_state.json"
 try:
     with open(LESSER_USAGE_STATE_FILE, "r", encoding="utf-8") as file:
@@ -733,6 +781,17 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    earned_coins = award_message_coin(message)
+    if earned_coins:
+        try:
+            await message.channel.send(
+                f"{message.author.mention} earned {BRAX_COINS_EMOJI} **1 BRAX Coin**! Balance: **{coin_balance(message.guild.id, message.author.id)}**",
+                delete_after=8,
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        except discord.HTTPException:
+            pass
+
     # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
     member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
 
@@ -1007,11 +1066,36 @@ uwu_webhooks = {}
 
 def uwuify_text(value):
     value = str(value or "")
-    value = re.sub(r"\bhi\b", "h-h~hi senpai's", value, flags=re.IGNORECASE)
-    value = re.sub(r"\bhello\b", "hewwo", value, flags=re.IGNORECASE)
+    if not value:
+        return "uwu~"
+    swaps = [
+        (r"\bhello\b", "hewwo"), (r"\bhey\b", "hewwo"),
+        (r"\bthe\b", "da"), (r"\bthis\b", "dis"), (r"\bthat\b", "dat"),
+        (r"\bthere\b", "dere"), (r"\bthink\b", "fink"), (r"\bwith\b", "wif"),
+        (r"\byou\b", "yu"), (r"\byour\b", "yur"), (r"\bare\b", "awwe"),
+        (r"\bvery\b", "vewy"), (r"\blove\b", "wuv"), (r"\breally\b", "weawwy"),
+        (r"\bplease\b", "pwease"), (r"\bfriend\b", "fwiend"),
+        (r"\bsmall\b", "smol"), (r"\bcute\b", "kyoot"), (r"\bno\b", "nyo"),
+        (r"\bokay\b", "okie"), (r"\bthanks\b", "fankies"), (r"\bwhat\b", "w-what"),
+        (r"\bwhy\b", "w-why"), (r"\bwait\b", "w-wait"), (r"\bhelp\b", "hewlp"),
+        (r"\bgoing\b", "g-going"), (r"\bwant\b", "w-want"), (r"\bcan\b", "c-can"),
+        (r"\bhi\b", "hai"),
+    ]
+    for pattern, replacement in swaps:
+        value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
     value = re.sub(r"[rl]", "w", value, flags=re.IGNORECASE)
-    value = re.sub(r"n([aeiou])", r"ny\1", value, flags=re.IGNORECASE)
-    return f"uwu~ {value} >w<" if value else "uwu~"
+    words = value.split(" ")
+    for i, word in enumerate(words):
+        match = re.match(r"^([^A-Za-z]*)([A-Za-z]{3,})([^A-Za-z]*)$", word)
+        if match and random.random() < 0.20:
+            prefix, core, suffix = match.groups()
+            if core.casefold() not in {"uwu", "owo", "nya"}:
+                words[i] = f"{prefix}{core[0]}-{core}{suffix}"
+    value = " ".join(words)
+    endings = ["nya~", ">w<", "uwu~", "owo!", "p-pwease~", "hehe~", "mwehehe"]
+    if random.random() < 0.35:
+        value += " " + random.choice(["*tail wag*", "*happy wiggle*", "*tiny gasp*"])
+    return f"{value} {random.choice(endings)}"
 
 async def relay_uwu_message(message):
     """Repost a transformed message, preferring a labelled webhook and falling back to BRAX."""
@@ -2298,6 +2382,180 @@ async def ticket_panel_command(ctx):
         await ctx.reply("I need View Channel, Send Messages, and Embed Links there.", mention_author=False)
 
 
+# BRAX Coins economy and fun games. Coins are virtual server points only.
+SHOP_ITEMS = {
+    "lesser": (50, "Lesser BRAX Usage"),
+    "usage": (7500, "BRAX Usage (staff review)"),
+    "unblacklist": (40, "regular blacklist removal"),
+    "divine": (450, "Divine punishment removal (staff review)"),
+    "customrole": (500, "custom role"),
+}
+
+@bot.command(name="balance", aliases=["bal", "coins"])
+async def balance_command(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    key = economy_key(ctx.guild.id, member.id)
+    count = int(economy_data.setdefault("message_counts", {}).get(key, 0))
+    embed = discord.Embed(
+        title=f"{BRAX_COINS_EMOJI} {member.display_name}'s Wallet",
+        description=f"Balance: **{coin_balance(ctx.guild.id, member.id)}** BRAX Coins\nMessage progress: **{count % 10}/10** toward your next coin",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    await ctx.reply(embed=embed, mention_author=False)
+
+@bot.command(name="shop", aliases=["store"])
+async def shop_command(ctx):
+    embed = discord.Embed(
+        title=f"{BRAX_COINS_EMOJI} BRAX Store",
+        description=(
+            "Earn **1 BRAX Coin every 10 messages**. Coins are virtual server points.\n\n"
+            "**50** — Lesser BRAX Usage: b!buy lesser\n"
+            "**7,500** — BRAX Usage (staff review): b!buy usage\n"
+            "**40** — Remove one regular blacklist: b!buy unblacklist\n"
+            "**450** — Divine punishment removal (staff review): b!buy divine\n"
+            "**500** — Custom role: b!buy customrole\n\n"
+            "Check your wallet with b!balance."
+        ),
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
+    await ctx.reply(embed=embed, mention_author=False)
+
+@bot.command(name="buy")
+async def buy_command(ctx, item: str, *, details: str = ""):
+    item = item.casefold().replace("-", "").replace("_", "")
+    aliases = {"lesserusage": "lesser", "braxusage": "usage", "blacklist": "unblacklist", "divinepunishment": "divine", "custom": "customrole", "role": "customrole"}
+    item = aliases.get(item, item)
+    if item not in SHOP_ITEMS:
+        await ctx.reply("Unknown item. Use b!shop.", mention_author=False)
+        return
+    price, label = SHOP_ITEMS[item]
+    if coin_balance(ctx.guild.id, ctx.author.id) < price:
+        await ctx.reply(f"You need {price} {BRAX_COINS_EMOJI}; your balance is {coin_balance(ctx.guild.id, ctx.author.id)}.", mention_author=False)
+        return
+
+    if item == "lesser":
+        role = ctx.guild.get_role(LESSER_BRAX_USAGE_ROLE_ID)
+        if role is None or role >= ctx.guild.me.top_role or role in ctx.author.roles:
+            await ctx.reply("The role is unavailable, above my role, or you already have it. No coins spent.", mention_author=False)
+            return
+        if ctx.author.id in lesser_usage_state.get("blocked_users", []):
+            await ctx.reply("Your account is blocked from receiving Lesser BRAX Usage.", mention_author=False)
+            return
+        spend_coins(ctx.guild.id, ctx.author.id, price)
+        try:
+            await ctx.author.add_roles(role, reason="Purchased with BRAX Coins")
+        except discord.HTTPException:
+            add_coins(ctx.guild.id, ctx.author.id, price)
+            await ctx.reply("Role assignment failed; your coins were returned.", mention_author=False)
+            return
+        await ctx.reply(f"Purchased {role.mention} for {price} {BRAX_COINS_EMOJI}.", mention_author=False)
+        return
+
+    if item == "customrole":
+        name = details.strip()
+        if not name:
+            await ctx.reply("What should the role be called? Reply within 60 seconds.", mention_author=False)
+            try:
+                answer = await bot.wait_for("message", timeout=60, check=lambda m: m.author.id == ctx.author.id and m.channel.id == ctx.channel.id)
+                name = answer.content.strip()
+            except asyncio.TimeoutError:
+                await ctx.reply("Timed out. No coins were spent.", mention_author=False)
+                return
+        name = shorten(name, 80).strip()
+        if not name or not ctx.guild.me.guild_permissions.manage_roles:
+            await ctx.reply("Invalid name or I need Manage Roles. No coins spent.", mention_author=False)
+            return
+        spend_coins(ctx.guild.id, ctx.author.id, price)
+        try:
+            role = await ctx.guild.create_role(name=name, reason=f"BRAX Coins custom role for {ctx.author}")
+            await ctx.author.add_roles(role, reason="Custom role purchase")
+        except discord.HTTPException:
+            add_coins(ctx.guild.id, ctx.author.id, price)
+            await ctx.reply("I couldn't create or assign that role. Your coins were returned.", mention_author=False)
+            return
+        await ctx.reply(f"Created and assigned {role.mention} for {price} {BRAX_COINS_EMOJI}.", mention_author=False)
+        return
+
+    if item == "unblacklist":
+        eligible = [(name, ctx.guild.get_role(role_id)) for name, role_id in BLACKLIST_ROLES.items() if name != "Divine punishment"]
+        eligible = [(name, role) for name, role in eligible if role is not None and role in ctx.author.roles]
+        if not eligible:
+            await ctx.reply("You don't have a regular blacklist role to remove.", mention_author=False)
+            return
+        if details:
+            eligible = [(name, role) for name, role in eligible if name.casefold() == details.casefold()]
+        if len(eligible) != 1:
+            await ctx.reply("Specify which blacklist to remove: " + ", ".join(name for name, role in eligible), mention_author=False)
+            return
+        name, role = eligible[0]
+        if role >= ctx.guild.me.top_role:
+            await ctx.reply("That role is above my highest role. Ask staff.", mention_author=False)
+            return
+        spend_coins(ctx.guild.id, ctx.author.id, price)
+        try:
+            await ctx.author.remove_roles(role, reason="Purchased removal with BRAX Coins")
+        except discord.HTTPException:
+            add_coins(ctx.guild.id, ctx.author.id, price)
+            await ctx.reply("Removal failed; your coins were returned.", mention_author=False)
+            return
+        await ctx.reply(f"Removed {name} for {price} {BRAX_COINS_EMOJI}.", mention_author=False)
+        return
+
+    if item == "divine":
+        role = ctx.guild.get_role(BLACKLIST_ROLES["Divine punishment"])
+        if role is None or role not in ctx.author.roles:
+            await ctx.reply("You don't have Divine punishment.", mention_author=False)
+            return
+    else:
+        role = ctx.guild.get_role(BRAX_USAGE_ROLE_ID)
+        if role is None or role in ctx.author.roles:
+            await ctx.reply("You already have BRAX Usage or the role is missing.", mention_author=False)
+            return
+    spend_coins(ctx.guild.id, ctx.author.id, price)
+    add_coins(ctx.guild.id, ctx.author.id, price)
+    staff = "<@1521469840970350632> <@1511412885040009309>"
+    await ctx.channel.send(
+        f"{staff} — {ctx.author.mention} bought a request for **{label}** ({price} {BRAX_COINS_EMOJI}). Please review it.",
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+    )
+    await ctx.reply("Your request was sent to staff. Coins are held pending review.", mention_author=False)
+
+@bot.command(name="coinflip", aliases=["flip"])
+async def coinflip_command(ctx, side: str, amount: int):
+    side = side.casefold()
+    if side not in {"heads", "tails", "h", "t"} or not 1 <= amount <= MAX_GAMBLE_BET:
+        await ctx.reply(f"Use b!coinflip heads 10 or b!coinflip tails 10 (1–{MAX_GAMBLE_BET} coins). {COINFLIP_EMOJI}", mention_author=False)
+        return
+    if not spend_coins(ctx.guild.id, ctx.author.id, amount):
+        await ctx.reply("Not enough BRAX Coins.", mention_author=False)
+        return
+    result = random.choice(["heads", "tails"])
+    won = side[0] == result[0]
+    if won:
+        add_coins(ctx.guild.id, ctx.author.id, amount * 2)
+    await ctx.reply(f"{COINFLIP_EMOJI} **{result.title()}!** " + (f"You won {amount} coins." if won else f"You lost {amount} coins.") + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
+
+@bot.command(name="gamble")
+async def gamble_command(ctx, amount: int, multiplier: int = 2):
+    if multiplier not in {2, 6} or not 1 <= amount <= MAX_GAMBLE_BET:
+        await ctx.reply(f"Use b!gamble 20 2 or b!gamble 20 6. Bets are capped at {MAX_GAMBLE_BET} virtual coins.", mention_author=False)
+        return
+    if not spend_coins(ctx.guild.id, ctx.author.id, amount):
+        await ctx.reply("Not enough BRAX Coins.", mention_author=False)
+        return
+    won = random.random() < (0.5 if multiplier == 2 else 1 / 6)
+    if won:
+        add_coins(ctx.guild.id, ctx.author.id, amount * multiplier)
+    await ctx.reply((f"You hit {multiplier}x!" if won else f"The {multiplier}x round missed.") + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
+
+@bot.command(name="stocks", aliases=["stock"])
+async def stocks_command(ctx):
+    holdings = economy_data.setdefault("stocks", {}).get(economy_key(ctx.guild.id, ctx.author.id), {})
+    listing = ", ".join(f"{name} x{count}" for name, count in holdings.items()) or "No shares yet."
+    await ctx.reply(embed=discord.Embed(title="BRAX Market", description=f"Your simulated portfolio: {listing}\nStock trading features can be added next.", color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
+
+
+
 HELP_PAGES = [
     {
         "title": "BRAX • Command Access",
@@ -2362,8 +2620,9 @@ HELP_PAGES = [
         "title": "<:Fun:1571324174394200085> Fun",
         "description": (
             "`b!mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n"
-            "`b!uwu @user` — Toggle UWU lock. Their messages are transformed and relayed "
-            "through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n\n"
+            "`b!uwu @user` — Toggle advanced UWU lock with randomized stutters, word swaps and endings. "
+            "through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n"
+            "`b!balance [@user]`, `b!shop`, `b!store`, `b!buy`, `b!coinflip`, `b!gamble`, `b!stocks` — BRAX Coins and fun games.\n\n"
             "UWU lock requires BRAX Usage and Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `b!mlogs` history."
         ),
@@ -2469,7 +2728,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
     embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
     embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!lusageadd @user, b!help, /help", inline=False)
-    embed.add_field(name="Fun", value="b!mweute @user (fake mute), b!uwu @user (toggle UWU lock)", inline=False)
+    embed.add_field(name="Fun & Economy", value="b!mweute, b!uwu, b!balance, b!shop, b!store, b!buy, b!coinflip, b!gamble, b!stocks", inline=False)
     embed.set_footer(text="BRAX • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -2480,5 +2739,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: full-main-py-rewrite-2026-11-14 | owner-braxton-uwu | uwu-list | lesser-usage-fun-only | permanent-lesser-role-revoke | lesser-usage-grant | five-page-help")
+print("BRAX BUILD: economy-uwu-upgrade-2026-11-14 | coins-per-10-messages | shop | coinflip | gamble | custom-role | advanced-uwu | full-moderation")
 bot.run(TOKEN)
