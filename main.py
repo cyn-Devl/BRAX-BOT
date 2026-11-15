@@ -669,7 +669,7 @@ async def debt_collection_loop():
                     if strike == 1:
                         await channel.send(f"FBI/Zinzicraft collected <@{user_id}>'s overdue BRAX debt and cleared the negative balance.")
                     else:
-                        await channel.send(f"FBI/Zinzicraft returned for <@{user_id}>. Debt cleared, but the mining license is revoked. BRAX economy commands are now limited to b!gamble, b!balance, and b!help.")
+                        await channel.send(f"FBI/Zinzicraft returned for <@{user_id}>. Debt cleared, but the mining license is revoked. BRAX economy commands are now limited to b!jobs, b!job, b!work, b!balance, and b!help.")
                 except discord.HTTPException as error:
                     print(f"BRAX debt notice failed for {key}: {error}")
         await asyncio.sleep(5)
@@ -1050,9 +1050,9 @@ async def on_message(message):
         if message.content.startswith("b!"):
             context = await bot.get_context(message)
             command_name = context.command.name if context.command else None
-            if command_name not in {"gamble", "balance", "bal", "coins", "help"}:
+            if command_name not in {"jobs", "job", "work", "balance", "bal", "coins", "help"}:
                 await message.reply(
-                    "FBI/Zinzicraft revoked your mining license. You can currently only use b!gamble, b!balance, and b!help.",
+                    "FBI/Zinzicraft revoked your mining license. You can currently use b!jobs, b!job, b!work, b!balance, and b!help.",
                     mention_author=False,
                 )
                 return
