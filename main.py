@@ -2523,7 +2523,7 @@ async def buy_command(ctx, item: str, *, details: str = ""):
 @bot.command(name="coinadd")
 async def coinadd_command(ctx, member: discord.Member, amount: int):
     # Only Braxton's Discord account may use this economy-admin command.
-    if ctx.author.id != 1521469840970350632:
+    if ctx.author.id != 1511412885040009309:
         await ctx.reply("You aren't authorized to use this command.", mention_author=False)
         return
     if amount <= 0:
