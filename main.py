@@ -137,6 +137,13 @@ def save_uwu_locks():
 def uwu_lock_key(guild_id, user_id):
     return f"{guild_id}:{user_id}"
 
+def moderator_label(moderator_id, fallback="Unknown"):
+    if moderator_id == 1521469840970350632:
+        return "<:Brax:1571324199765549219> Braxton"
+    if moderator_id == 1511412885040009309:
+        return "<:Kaydn:1571324228127690954> kaydnn"
+    return str(fallback)
+
 try:
     with open(BLACKLIST_ASSIGNMENTS_FILE, "r", encoding="utf-8") as file:
         blacklist_assignments = json.load(file)
@@ -251,7 +258,11 @@ async def log_brax_action(guild, target, moderator, action, reason, duration=Non
         timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Member", value=f"{target}\nID: {target.id}", inline=True)
-    embed.add_field(name="Moderator", value=f"{moderator}\nID: {moderator.id}", inline=True)
+    embed.add_field(
+        name="Moderator",
+        value=f"{moderator_label(moderator.id, moderator)}\n{moderator} (ID: {moderator.id})",
+        inline=True,
+    )
     if duration:
         embed.add_field(name="Duration", value=str(duration), inline=True)
     embed.add_field(name="Reason", value=shorten(reason or "No reason provided"), inline=False)
@@ -1644,13 +1655,26 @@ def moderation_history_embed(member, page):
     total_pages = max(1, (len(entries) + 2) // 3)
     start = page * 3
     selected = list(reversed(entries))[start:start + 3]
-    embed = discord.Embed(title=f"Moderation Logs • {member}", description=f"Showing {len(selected)} of {len(entries)} recorded actions.", color=discord.Color.from_rgb(58, 48, 35))
+    embed = discord.Embed(
+        title=f"Moderation Logs • {member}",
+        description=f"Showing {len(selected)} of {len(entries)} recorded actions.",
+        color=discord.Color.from_rgb(58, 48, 35),
+    )
     for index, entry in enumerate(selected, start=start + 1):
-        details = [f"Action: {entry.get(chr(97)+chr(99)+chr(116)+chr(105)+chr(111)+chr(110), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}", f"Moderator ID: {entry.get(chr(109)+chr(111)+chr(100)+chr(101)+chr(114)+chr(97)+chr(116)+chr(111)+chr(114)+chr(95)+chr(105)+chr(100), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}", f"Reason: {shorten(entry.get(chr(114)+chr(101)+chr(97)+chr(115)+chr(111)+chr(110), chr(78)+chr(111)+chr(32)+chr(114)+chr(101)+chr(97)+chr(115)+chr(111)+chr(110)), 500)}"]
-        if entry.get("duration"): details.append(f"Duration: {entry[chr(100)+chr(117)+chr(114)+chr(97)+chr(116)+chr(105)+chr(111)+chr(110)]}")
-        details.append(f"When: {entry.get(chr(116)+chr(105)+chr(109)+chr(101)+chr(115)+chr(116)+chr(97)+chr(109)+chr(112), chr(85)+chr(110)+chr(107)+chr(110)+chr(111)+chr(119)+chr(110))}")
+        moderator_id = entry.get("moderator_id", "Unknown")
+        moderator_name = moderator_label(moderator_id, entry.get("moderator", "Unknown"))
+        details = [
+            f"Action: {entry.get('action', 'Unknown')}",
+            f"Moderator: {moderator_name}",
+            f"Moderator ID: {moderator_id}",
+            f"Reason: {shorten(entry.get('reason', 'No reason provided'), 500)}",
+        ]
+        if entry.get("duration"):
+            details.append(f"Duration: {entry['duration']}")
+        details.append(f"When: {entry.get('timestamp', 'Unknown')}")
         embed.add_field(name=f"Log {index}", value="\n".join(details), inline=False)
-    if not entries: embed.description = "No moderation actions have been recorded for this member yet."
+    if not entries:
+        embed.description = "No moderation actions have been recorded for this member yet."
     embed.set_footer(text=f"BRAX • Page {page + 1}/{total_pages} • 3 logs per page")
     return embed
 
@@ -2135,6 +2159,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
     embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
     embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!help, /help", inline=False)
+    embed.add_field(name="Fun", value="b!mweute @user (fake mute), b!uwu @user (toggle UWU lock)", inline=False)
     embed.set_footer(text="BRAX • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
