@@ -105,6 +105,10 @@ economy_data.setdefault("debt_strikes", {})
 economy_data.setdefault("gamble_only", {})
 economy_data.setdefault("jobs", {})
 economy_data.setdefault("work_cooldowns", {})
+economy_data.setdefault("job_rejoin_cooldowns", {})
+economy_data.setdefault("crime_attempts", {})
+economy_data.setdefault("crime_cooldowns", {})
+economy_data.setdefault("jail_until", {})
 economy_data.setdefault("companies", {})
 economy_data.setdefault("company_members", {})
 economy_data.setdefault("company_invites", {})
@@ -1128,8 +1132,20 @@ async def on_message(message):
         except discord.HTTPException:
             pass
 
-    # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
+    # Jail enforcement: block all prefix commands until the one-minute sentence ends.
     member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
+    if member is not None and message.content.startswith("b!"):
+        jail_key = economy_key(message.guild.id, member.id)
+        jail_until = float(economy_data.setdefault("jail_until", {}).get(jail_key, 0))
+        if jail_until > time.time():
+            remaining = max(1, int(jail_until - time.time() + 0.999))
+            await message.reply(f"🚔 You are in TBR jail. Commands are locked for **{remaining} more seconds**.", mention_author=False)
+            return
+        elif jail_until:
+            economy_data["jail_until"].pop(jail_key, None)
+            save_economy()
+
+    # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
 
     if member is not None and economy_data.setdefault("gamble_only", {}).get(economy_key(message.guild.id, member.id)):
         if message.content.startswith("b!"):
@@ -3225,7 +3241,7 @@ async def jobs_command(ctx):
         rows.append(f"**{name.title()}**: {description} | {low}-{high} coins per shift{tag}")
     embed = discord.Embed(
         title="Available Jobs",
-        description="\n".join(rows) + "\nJoin with b!job join <name>; work every 30 minutes with b!work.",
+        description="\n".join(rows) + "\nJoin with b!job join <name>; work every 10 minutes with b!work. Leaving a job starts a 5-minute wait before rejoining.",
         color=discord.Color.from_rgb(58, 48, 35),
     )
     await ctx.reply(embed=embed, mention_author=False)
@@ -3239,17 +3255,69 @@ async def job_command(ctx, action: str, *, job_name: str = ""):
         if name not in JOB_DEFINITIONS:
             await ctx.reply("That job doesn't exist. Use b!jobs to see the list.", mention_author=False)
             return
-        economy_data.setdefault("jobs", {})[key] = name
-        economy_data.setdefault("work_cooldowns", {}).pop(key, None)
+        jobs = economy_data.setdefault("jobs", {})
+        if key in jobs:
+            await ctx.reply("Leave your current job first with b!job leave.", mention_author=False)
+            return
+        rejoin_ready = float(economy_data.setdefault("job_rejoin_cooldowns", {}).get(key, 0))
+        if time.time() < rejoin_ready:
+            remaining = max(1, int(rejoin_ready - time.time() + 0.999))
+            await ctx.reply(f"You must wait **{remaining} more seconds** before joining another job.", mention_author=False)
+            return
+        jobs[key] = name
         save_economy()
-        await ctx.reply(f"You're now employed as a {name.title()}. Use b!work every 30 minutes.", mention_author=False)
+        await ctx.reply(f"You're now employed as a {name.title()}. Use b!work every 10 minutes.", mention_author=False)
     elif action.casefold() == "leave":
         old = economy_data.setdefault("jobs", {}).pop(key, None)
-        economy_data.setdefault("work_cooldowns", {}).pop(key, None)
-        save_economy()
-        await ctx.reply("You left your job." if old else "You don't currently have a job.", mention_author=False)
+        if old:
+            economy_data.setdefault("job_rejoin_cooldowns", {})[key] = time.time() + 300
+            save_economy()
+        await ctx.reply("You left your job. Wait 5 minutes before joining another one." if old else "You don't currently have a job.", mention_author=False)
     else:
         await ctx.reply("Use b!job join <name> or b!job leave.", mention_author=False)
+
+
+@bot.command(name="crime")
+async def crime_command(ctx):
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    now = time.time()
+    jail_until = float(economy_data.setdefault("jail_until", {}).get(key, 0))
+    if jail_until > now:
+        remaining = max(1, int(jail_until - now + 0.999))
+        await ctx.reply(f"🚔 You're in TBR jail for **{remaining} more seconds**.", mention_author=False)
+        return
+
+    cooldowns = economy_data.setdefault("crime_cooldowns", {})
+    ready = float(cooldowns.get(key, 0))
+    if now < ready:
+        await ctx.reply(f"Lay low for **{max(1, int(ready - now + 0.999))} more seconds** before trying another crime.", mention_author=False)
+        return
+
+    attempts = economy_data.setdefault("crime_attempts", {})
+    recent = [stamp for stamp in attempts.get(key, []) if now - float(stamp) < 600]
+    recent.append(now)
+    attempts[key] = recent
+    cooldowns[key] = now + 30
+
+    if len(recent) >= 4 or random.random() < 0.25:
+        economy_data.setdefault("jail_until", {})[key] = now + 60
+        attempts[key] = []
+        save_economy()
+        await ctx.reply(
+            "🚨 **TBR CAUGHT YOU!** Your crime attempt got noticed. You've been sent to jail for **1 minute**. "
+            "All commands are locked until your sentence ends.",
+            mention_author=False,
+        )
+        return
+
+    reward = random.randint(15, 40)
+    add_coins(ctx.guild.id, ctx.author.id, reward)
+    save_economy()
+    await ctx.reply(
+        f"🕶️ You got away with it and earned **{reward}** {BRAX_COINS_EMOJI}. "
+        f"TBR heat: **{len(recent)}/4** attempts in the last 10 minutes.",
+        mention_author=False,
+    )
 
 
 @bot.command(name="work")
@@ -3266,7 +3334,7 @@ async def work_command(ctx):
         return
     low, high, _ = JOB_DEFINITIONS[job]
     pay = random.randint(low, high)
-    economy_data["work_cooldowns"][key] = now + 1800
+    economy_data["work_cooldowns"][key] = now + 600
     add_coins(ctx.guild.id, ctx.author.id, pay)
     save_economy()
     await ctx.reply(f"Shift complete! Your {job.title()} job paid {pay} {BRAX_COINS_EMOJI}.", mention_author=False)
@@ -3774,7 +3842,8 @@ HELP_PAGES = [
             "`b!coinlb` — View the BRAX Coin leaderboard. `b!coinadd @user <amount>` — Add coins (Braxton only).\n"
             "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n"
             "`b!mine` — Dig for Mick & Rorty materials and collectibles (2.5-second cooldown). `b!inventory` — View your finds.\n"
-            "`b!jobs`, `b!job join <name>`, `b!work` — Choose a job and earn wages every 30 minutes.\n"
+            "`b!jobs`, `b!job join <name>`, `b!job leave`, `b!work` — Choose a job and earn wages every 10 minutes. Leaving starts a 5-minute rejoin cooldown.\n"
+            "`b!crime` — Try a fictional crime for coins. Repeated attempts can get you caught by TBR and jailed for 1 minute.\n"
             "`b!company` — Create a company, invite members, and manage its bank.\n"
             "`b!cryptocreate`, `b!cryptomarket`, `b!cryptobuy`, `b!cryptosell` — Create and trade virtual community coins (5 tokens to create).\n"
             "`b!sell <item> [amount]` — Sell finds for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
