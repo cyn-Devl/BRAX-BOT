@@ -3,6 +3,7 @@ import json
 import asyncio
 import re
 import time
+import io
 from collections import OrderedDict
 from datetime import timedelta
 
@@ -58,6 +59,7 @@ MEDIA_CHANNEL_ID = 1561145636559003749
 TICKETS_CHANNEL_ID = 1561188845154865173
 TICKET_CATEGORY_ID = 1561150725588000808
 TICKET_STAFF_ROLE_ID = 1563998176187260949
+TICKET_LOG_CHANNEL_ID = 1571315910684180652
 TICKET_EMOJIS = {
     "open": "<:Ticket:1571278544041156668>",
     "claim": "<a:Claim:1571281287853907978>",
@@ -1228,7 +1230,7 @@ class TicketTypeSelect(discord.ui.Select):
                 channel_name,
                 category=category,
                 overwrites=overwrites,
-                topic=f"Ticket opened by {member} ({member.id}) • Type: {self.values[0]}",
+                topic=f"BRAX_TICKET|opener={member.id}|type={self.values[0]}|claimed=none",
                 reason=f"Ticket opened by {member}",
             )
         except discord.Forbidden:
@@ -1270,7 +1272,7 @@ class TicketTypeView(discord.ui.View):
 class CloseReasonModal(discord.ui.Modal, title="Close ticket with a reason"):
     reason = discord.ui.TextInput(
         label="Reason",
-        placeholder="Enter the reason for closing this ticket",
+        placeholder="Enter why this ticket is being closed",
         style=discord.TextStyle.paragraph,
         max_length=1000,
         required=True,
@@ -1278,6 +1280,46 @@ class CloseReasonModal(discord.ui.Modal, title="Close ticket with a reason"):
 
     async def on_submit(self, interaction):
         await close_ticket_channel(interaction, str(self.reason))
+
+
+def ticket_metadata(channel):
+    metadata = {"opener": "Unknown", "type": "Unknown", "claimed": "Not claimed"}
+    topic = channel.topic or ""
+    if topic.startswith("BRAX_TICKET|"):
+        for part in topic.split("|")[1:]:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                if key == "opener":
+                    metadata["opener"] = value
+                elif key == "type":
+                    metadata["type"] = value
+                elif key == "claimed":
+                    metadata["claimed"] = value if value != "none" else "Not claimed"
+    return metadata
+
+
+async def build_ticket_transcript(channel):
+    lines = [
+        f"Ticket: #{channel.name}",
+        f"Channel ID: {channel.id}",
+        f"Created: {channel.created_at.isoformat()}",
+        f"Topic: {channel.topic or 'No topic'}",
+        "",
+        "========== TICKET MESSAGES (oldest first) ==========",
+        "",
+    ]
+    async for message in channel.history(limit=None, oldest_first=True):
+        lines.append(f"[{message.created_at.isoformat()}] {message.author} (ID: {message.author.id})")
+        lines.append(message.content or "[No text content]")
+        for attachment in message.attachments:
+            lines.append(f"Attachment: {attachment.filename} — {attachment.url}")
+        for embed in message.embeds:
+            if embed.title:
+                lines.append(f"Embed title: {embed.title}")
+            if embed.description:
+                lines.append(f"Embed description: {embed.description}")
+        lines.append("")
+    return "\n".join(lines).encode("utf-8")
 
 
 async def close_ticket_channel(interaction, reason=None):
@@ -1288,27 +1330,90 @@ async def close_ticket_channel(interaction, reason=None):
     if not isinstance(channel, discord.TextChannel) or channel.category_id != TICKET_CATEGORY_ID:
         await interaction.response.send_message("This button can only be used inside a ticket.", ephemeral=True)
         return
+    if not reason or not reason.strip():
+        await interaction.response.send_message("A closing reason is required.", ephemeral=True)
+        return
+
     await interaction.response.defer(ephemeral=True, thinking=True)
+    guild = channel.guild
+    metadata = ticket_metadata(channel)
+    log_channel = guild.get_channel(TICKET_LOG_CHANNEL_ID)
+    if log_channel is None:
+        try:
+            log_channel = await guild.fetch_channel(TICKET_LOG_CHANNEL_ID)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as error:
+            await interaction.followup.send(
+                f"Couldn't access the ticket log channel ({error}). The ticket has been left open.",
+                ephemeral=True,
+            )
+            return
+    if not isinstance(log_channel, discord.TextChannel):
+        await interaction.followup.send(
+            "The configured ticket log destination isn't a text channel. The ticket has been left open.",
+            ephemeral=True,
+        )
+        return
+
     try:
-        everyone = channel.guild.default_role
-        overwrite = channel.overwrites_for(everyone)
-        overwrite.send_messages = False
-        await channel.set_permissions(everyone, overwrite=overwrite, reason="Ticket closed")
-        for target, target_overwrite in list(channel.overwrites.items()):
-            if isinstance(target, discord.Member):
-                target_overwrite.send_messages = False
-                await channel.set_permissions(target, overwrite=target_overwrite, reason="Ticket closed")
-        suffix = channel.name
-        if not suffix.startswith("closed-"):
-            await channel.edit(name=f"closed-{suffix}"[:100])
-        text = "This ticket has been closed."
-        if reason:
-            text += f"\n**Reason:** {reason}"
-        await interaction.followup.send(text, ephemeral=True)
+        transcript = await build_ticket_transcript(channel)
+        filename = f"{channel.name}-transcript.txt"
+        opener_value = metadata["opener"]
+        if opener_value.isdigit():
+            opener_value = f"<@{opener_value}> (ID: {opener_value})"
+        claimed_value = metadata["claimed"]
+        if claimed_value.isdigit():
+            claimed_value = f"<@{claimed_value}> (ID: {claimed_value})"
+
+        embed = discord.Embed(
+            title="Ticket Closed • Transcript",
+            description=f"Ticket: #{channel.name}\nChannel ID: {channel.id}",
+            color=discord.Color.dark_red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Ticket Type", value=metadata["type"].replace("roleapply", "Applying for a role").title(), inline=True)
+        embed.add_field(name="Opened By", value=opener_value, inline=True)
+        embed.add_field(name="Claimed By", value=claimed_value, inline=True)
+        embed.add_field(name="Closed By", value=f"{interaction.user.mention}\n{interaction.user} (ID: {interaction.user.id})", inline=True)
+        embed.add_field(name="Closing Reason", value=shorten(reason.strip(), 1024), inline=False)
+        embed.set_footer(text="BRAX • Ticket Archive")
+
+        await log_channel.send(
+            embed=embed,
+            file=discord.File(io.BytesIO(transcript), filename=filename),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
     except discord.Forbidden:
-        await interaction.followup.send("I need Manage Channels to close this ticket.", ephemeral=True)
+        await interaction.followup.send(
+            "I can't read the ticket or post its transcript. Check View Channel, Read Message History, Send Messages, and Attach Files permissions. The ticket has been left open.",
+            ephemeral=True,
+        )
+        return
     except discord.HTTPException as error:
-        await interaction.followup.send(f"Couldn't close the ticket: {error}", ephemeral=True)
+        await interaction.followup.send(
+            f"Couldn't archive the ticket transcript ({error}). The ticket has been left open.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await channel.delete(reason=f"Ticket closed by {interaction.user}: {reason.strip()}")
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "The transcript was saved, but I couldn't delete the ticket. Check my Manage Channels permission.",
+            ephemeral=True,
+        )
+        return
+    except discord.HTTPException as error:
+        await interaction.followup.send(
+            f"The transcript was saved, but deleting the ticket failed: {error}",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.followup.send(
+        f"Ticket #{channel.name} was archived in {log_channel.mention} and deleted. Reason: {shorten(reason.strip(), 500)}",
+        ephemeral=True,
+    )
 
 
 class TicketControlsView(discord.ui.View):
@@ -1333,6 +1438,13 @@ class TicketControlsView(discord.ui.View):
         embed = message.embeds[0] if message.embeds else discord.Embed(title="Ticket opened")
         embed.description = "Thank you for opening a ticket we will be here shortly\n\n" + f"**This ticket has been claimed by {interaction.user.mention}.**"
         await message.edit(embed=embed, view=self)
+        channel = interaction.channel
+        metadata = ticket_metadata(channel)
+        metadata["claimed"] = str(interaction.user.id)
+        await channel.edit(
+            topic=f"BRAX_TICKET|opener={metadata['opener']}|type={metadata['type']}|claimed={metadata['claimed']}",
+            reason=f"Ticket claimed by {interaction.user}",
+        )
         await interaction.followup.send("Ticket claimed.", ephemeral=True)
 
     @discord.ui.button(
@@ -1354,7 +1466,13 @@ class TicketControlsView(discord.ui.View):
         custom_id="brax:tickets:close",
     )
     async def close(self, interaction, button):
-        await close_ticket_channel(interaction)
+        if not is_high_staff(interaction.user):
+            await interaction.response.send_message("You need the BRAX Usage role to close tickets with BRAX.", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
+            await interaction.response.send_message("This isn't a ticket channel.", ephemeral=True)
+            return
+        await interaction.response.send_modal(CloseReasonModal())
 
 
 
