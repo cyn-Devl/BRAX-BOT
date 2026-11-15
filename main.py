@@ -2869,7 +2869,7 @@ class BraxShopView(discord.ui.View):
             description = (
                 "50 BRAX Coins = 1 BRAX Token. Use b!convert; extra coins remain. Check with b!tokens.\n\n"
                 "5 Tokens — b!blacklist unlock: 3 uses; each regular blacklist lasts 3 hours.\n"
-                "30 Tokens — 2× gambling luck; each purchase doubles luck and stacks.\n"
+                "2 Tokens for 2× luck, 8 for 4×, 64 for 8×, 4,096 for 16×; prices keep increasing.\n"
                 "5 Tokens — Custom role with selected safe permissions: b!specialbuy customrole Name | permissions.\n"
                 "3 Tokens — 3 kick-protection charges.\n"
                 "20 Tokens — 1 ban-protection charge.\n"
@@ -2924,11 +2924,15 @@ async def special_buy_command(ctx, item: str, *, details: str = ""):
     item = item.casefold().replace("-", "").replace("_", "")
     aliases = {"gambleluck": "luck", "kickshield": "kickprotection", "banshield": "banprotection", "role": "customrole", "tokenimmunity": "stealimmunity"}
     item = aliases.get(item, item)
-    prices = {"blacklist": 5, "luck": 30, "kickprotection": 3, "banprotection": 20, "customrole": 5, "stealimmunity": 100}
-    if item not in prices:
+    prices = {"blacklist": 5, "kickprotection": 3, "banprotection": 20, "customrole": 5, "stealimmunity": 100}
+    if item not in prices and item != "luck":
         await ctx.reply("Unknown special item. Check page 2 of b!shop.", mention_author=False)
         return
-    price = prices[item]
+    if item == "luck":
+        current_luck = max(1, int(economy_data.setdefault("gamble_luck", {}).get(economy_key(ctx.guild.id, ctx.author.id), 1)))
+        price = 2 if current_luck == 1 else 2 ** ((3 * current_luck) // 2)
+    else:
+        price = prices[item]
     if token_balance(ctx.guild.id, ctx.author.id) < price:
         await ctx.reply(f"You need {price} BRAX Tokens.", mention_author=False)
         return
