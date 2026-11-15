@@ -100,15 +100,42 @@ try:
 except (OSError, json.JSONDecodeError):
     moderation_history = {}
 
+UWU_LOCKS_FILE = "uwu_locks.json"
+try:
+    with open(UWU_LOCKS_FILE, "r", encoding="utf-8") as file:
+        uwu_locks = json.load(file)
+except (OSError, json.JSONDecodeError):
+    uwu_locks = {}
+
 def save_moderation_history():
     with open(MODERATION_HISTORY_FILE, "w", encoding="utf-8") as file:
         json.dump(moderation_history, file, ensure_ascii=False, indent=2)
 
 def record_moderation_action(target, action, moderator, reason, duration=None):
-    entries = moderation_history.setdefault(str(target.id), [])
-    entries.append({"action": action, "moderator": str(moderator), "moderator_id": moderator.id, "reason": str(reason or "No reason provided"), "duration": duration, "timestamp": discord.utils.utcnow().isoformat()})
-    moderation_history[str(target.id)] = entries[-100:]
-    save_moderation_history()
+    try:
+        entries = moderation_history.setdefault(str(target.id), [])
+        entries.append({
+            "action": str(action),
+            "moderator": str(moderator),
+            "moderator_id": moderator.id,
+            "reason": str(reason or "No reason provided"),
+            "duration": duration,
+            "timestamp": discord.utils.utcnow().isoformat(),
+        })
+        moderation_history[str(target.id)] = entries[-100:]
+        save_moderation_history()
+        print(f"BRAX HISTORY: saved {action} for target {target.id}, moderator {moderator.id}")
+        return True
+    except (OSError, TypeError, AttributeError) as error:
+        print(f"BRAX HISTORY ERROR: could not save {action}: {error}")
+        return False
+
+def save_uwu_locks():
+    with open(UWU_LOCKS_FILE, "w", encoding="utf-8") as file:
+        json.dump(uwu_locks, file, ensure_ascii=False, indent=2)
+
+def uwu_lock_key(guild_id, user_id):
+    return f"{guild_id}:{user_id}"
 
 try:
     with open(BLACKLIST_ASSIGNMENTS_FILE, "r", encoding="utf-8") as file:
@@ -213,6 +240,23 @@ async def send_mod_log(guild, embed):
     except discord.HTTPException as error:
         print(f"BRAX: Failed to send moderation log: {error}")
         return False
+
+
+async def log_brax_action(guild, target, moderator, action, reason, duration=None):
+    """Save an action to the target's b!mlogs history and send it to mod logs."""
+    record_moderation_action(target, action, moderator, reason, duration)
+    embed = discord.Embed(
+        title=f"{EMOJIS['confirmed']} {action}",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Member", value=f"{target}\nID: {target.id}", inline=True)
+    embed.add_field(name="Moderator", value=f"{moderator}\nID: {moderator.id}", inline=True)
+    if duration:
+        embed.add_field(name="Duration", value=str(duration), inline=True)
+    embed.add_field(name="Reason", value=shorten(reason or "No reason provided"), inline=False)
+    embed.set_footer(text="BRAX • Moderation")
+    await send_mod_log(guild, embed)
 
 
 async def send_log(embed):
@@ -541,6 +585,12 @@ async def on_member_update(before, after):
         else:
             blacklist_assignments.pop(key, None)
             save_blacklist_assignments()
+            if actor is not None:
+                await log_brax_action(
+                    after.guild, after, actor,
+                    f"{role.name} Removed",
+                    "Authorized blacklist removal",
+                )
 
     # Re-apply suggestion restrictions if an unauthorized removal was reversed.
     if (
@@ -674,6 +724,25 @@ async def on_message(message):
             print(f"BRAX: MISSING Manage Messages in #{message.channel}; could not delete blacklisted suggestion.")
         except discord.HTTPException as error:
             print(f"BRAX: Could not delete blacklisted suggestion: {error}")
+        return
+
+    # UWU lock: replace a locked member's message with a transformed relay.
+    if member is not None and uwu_lock_key(message.guild.id, member.id) in uwu_locks:
+        try:
+            await relay_uwu_message(message)
+            print(f"BRAX UWU: relayed message from {member} in #{message.channel}.")
+        except discord.Forbidden:
+            print("BRAX UWU: missing Manage Messages or Manage Webhooks permission.")
+            try:
+                await message.channel.send(
+                    f"**{member.display_name} (uwu):** {uwuify_text(message.content)}",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                await message.delete()
+            except discord.HTTPException as error:
+                print(f"BRAX UWU: fallback relay failed: {error}")
+        except discord.HTTPException as error:
+            print(f"BRAX UWU: relay failed: {error}")
         return
 
     # Detect another member repeating the same text in the same channel.
@@ -861,6 +930,54 @@ def message_has_image(message):
             "tenor.com/view/", "giphy.com/gifs/", "media.tenor.com/",
         )
     )
+
+
+uwu_webhooks = {}
+
+def uwuify_text(value):
+    value = str(value or "")
+    value = re.sub(r"\bhi\b", "h-h~hi", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bhello\b", "hewwo", value, flags=re.IGNORECASE)
+    value = re.sub(r"[rl]", "w", value, flags=re.IGNORECASE)
+    value = re.sub(r"n([aeiou])", r"ny\1", value, flags=re.IGNORECASE)
+    return f"uwu~ {value} >w<" if value else "uwu~"
+
+async def relay_uwu_message(message):
+    """Repost a locked member's message through a clearly labelled UWU webhook."""
+    channel = message.channel
+    thread = channel if isinstance(channel, discord.Thread) else None
+    webhook_channel = channel.parent if thread else channel
+    content = uwuify_text(message.content)
+    if message.attachments:
+        content += "\n" + "\n".join(item.url for item in message.attachments)
+    if message.embeds:
+        content += "\n" + "\n".join(
+            f"[Embed] {embed.title or ''} {embed.url or ''}".strip()
+            for embed in message.embeds
+        )
+    content = shorten(content, 2000)
+
+    if isinstance(webhook_channel, discord.TextChannel):
+        webhook = uwu_webhooks.get(webhook_channel.id)
+        if webhook is None:
+            hooks = await webhook_channel.webhooks()
+            webhook = next((item for item in hooks if item.name == "BRAX UWU Relay"), None)
+            if webhook is None:
+                webhook = await webhook_channel.create_webhook(name="BRAX UWU Relay")
+            uwu_webhooks[webhook_channel.id] = webhook
+        await webhook.send(
+            content=content,
+            username=shorten(f"{message.author.display_name} (uwu)", 80),
+            avatar_url=message.author.display_avatar.url,
+            thread=thread,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    else:
+        await channel.send(
+            f"**{message.author.display_name} (uwu):** {content}",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    await message.delete()
 
 
 async def send_user_warning(guild, member, text):
@@ -1102,6 +1219,11 @@ class BlacklistSelect(discord.ui.Select):
                     f"Pray for {self.target.mention} as has gotten divine punishment 🙏",
                     allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
                 )
+        await log_brax_action(
+            guild, self.target, interaction.user,
+            f"{role.name} Assigned",
+            "Assigned through the BRAX blacklist menu",
+        )
         await interaction.followup.send(
             f"{interaction.user.mention} gave {self.target.mention} **{role.name}**.",
             allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
@@ -1514,19 +1636,7 @@ async def moderation_gate(ctx, permission_name):
 
 
 async def send_moderation_result(ctx, action, target, reason, duration=None, color=None):
-    record_moderation_action(target, action, ctx.author, reason, duration)
-    embed = discord.Embed(
-        title=f"{EMOJIS['confirmed']} {action}",
-        color=color or discord.Color.orange(),
-        timestamp=discord.utils.utcnow(),
-    )
-    embed.add_field(name="Member", value=f"{target}\nID: {target.id}", inline=True)
-    embed.add_field(name="Moderator", value=f"{ctx.author}\nID: {ctx.author.id}", inline=True)
-    if duration:
-        embed.add_field(name="Duration", value=duration, inline=True)
-    embed.add_field(name="Reason", value=shorten(reason or "No reason provided", 1024), inline=False)
-    embed.set_footer(text="BRAX • Moderation")
-    await send_mod_log(ctx.guild, embed)
+    await log_brax_action(ctx.guild, target, ctx.author, action, reason, duration)
 
 
 def moderation_history_embed(member, page):
@@ -1581,6 +1691,49 @@ async def moderation_logs_command(ctx, member: discord.Member):
         return
     view = ModerationHistoryView(member, ctx.author.id)
     await ctx.reply(embed=moderation_history_embed(member, 0), view=view, mention_author=False)
+
+@bot.command(name="mweute")
+async def fake_mute_command(ctx, member: discord.Member):
+    if not is_high_staff(ctx.author):
+        await ctx.reply(f"{EMOJIS['denied']} You need the BRAX Usage role to use Fun commands.", mention_author=False)
+        return
+    if member.id == ctx.author.id or member.bot:
+        await ctx.reply(f"{EMOJIS['denied']} Choose another server member.", mention_author=False)
+        return
+    await ctx.reply(
+        f"🔇 {member.mention} has been **FAKE MUTED**. This is only a joke—no Discord timeout was applied.",
+        mention_author=False,
+    )
+    await log_brax_action(
+        ctx.guild, member, ctx.author, "Fake Mute",
+        "Fun command: pretend mute only; no real timeout was applied",
+    )
+
+
+@bot.command(name="uwu")
+async def uwu_command(ctx, member: discord.Member):
+    if not await moderation_gate(ctx, "manage_messages"):
+        return
+    if member.bot:
+        await ctx.reply(f"{EMOJIS['denied']} Choose a human server member.", mention_author=False)
+        return
+    key = uwu_lock_key(ctx.guild.id, member.id)
+    if key in uwu_locks:
+        uwu_locks.pop(key, None)
+        save_uwu_locks()
+        action = "UWU Lock Removed"
+        message = f"{EMOJIS['confirmed']} UWU lock removed from {member.mention}."
+    else:
+        uwu_locks[key] = {"moderator_id": ctx.author.id, "enabled_at": discord.utils.utcnow().isoformat()}
+        save_uwu_locks()
+        action = "UWU Lock Enabled"
+        message = f"✨ {member.mention} is now UWU locked. Their messages will be transformed."
+    await ctx.reply(message, mention_author=False)
+    await log_brax_action(
+        ctx.guild, member, ctx.author, action,
+        "Toggled through b!uwu; message relay uses a labelled BRAX UWU webhook",
+    )
+
 
 @bot.command(name="mlog")
 async def moderation_log_command(ctx, channel: discord.TextChannel = None):
@@ -1829,8 +1982,8 @@ HELP_PAGES = [
             "the Divine punishment role:\n"
             "• noobidbody — `781537035428429866`\n"
             "• eyeless — `942862192867409941`\n"
-            "• Braxton — `1521469840970350632`\n"
-            "• kaydnn — `1511412885040009309`\n"
+            "• <:Brax:1571324199765549219> Braxton — `1521469840970350632`\n"
+            "• <:Kaydn:1571324228127690954> kaydnn — `1511412885040009309`\n"
             "• theimpostorsyndrome/testo — `1369381936283389983`\n"
             "• bob061344/British guy — `1276932593790484636`\n\n"
             "Members with brax usage can use regular blacklist controls but cannot use "
@@ -1871,10 +2024,21 @@ HELP_PAGES = [
             "`b!mlogs @user` — View a member's moderation history, three logs per page.\n"
             "`b!mlog [#channel]` — Set the moderation log channel. "
             "If no channel is supplied, BRAX uses the channel where you run the command.\n\n"
-            "Moderation actions are recorded with the affected member, moderator, "
-            "reason, and timeout duration when applicable."
+            "Moderation, blacklist, and Fun actions are recorded with the affected member "
+            "and the moderator who performed them."
         ),
         "footer": "BRAX • Logging",
+    },
+    {
+        "title": "<:Fun:1571324174394200085> Fun",
+        "description": (
+            "`b!mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n"
+            "`b!uwu @user` — Toggle UWU lock. Their messages are transformed and relayed "
+            "through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n\n"
+            "UWU lock requires BRAX Usage and Manage Messages. Fun actions are also sent "
+            "to the moderation log and saved in the target member's `b!mlogs` history."
+        ),
+        "footer": "BRAX • Fun",
     },
 ]
 
@@ -1981,5 +2145,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: brax-usage-role-access + usageadd + divine-allowlist + paginated-moderation-history + modlog-channel")
+print("BRAX BUILD: fun-commands + uwu-lock + full-action-history + blacklist-history + five-page-help")
 bot.run(TOKEN)
