@@ -1750,6 +1750,7 @@ HELP_PAGES = [
     {
         "title": "<:Logging:1571302754272542852> Logging",
         "description": (
+            "`b!mlogs @user` — View a member's moderation history, three logs per page.\n"
             "`b!mlog [#channel]` — Set the moderation log channel. "
             "If no channel is supplied, BRAX uses the channel where you run the command.\n\n"
             "Moderation actions are recorded with the affected member, moderator, "
