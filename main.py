@@ -354,16 +354,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="b!", intents=intents, help_command=None)
 
 @bot.event
-async def on_guild_channel_delete(channel):
-    trade = active_trade_for_channel(channel.id)
-    if trade is not None:
-        refund_trade(channel.guild.id, trade)
-        economy_data.setdefault("trades", {}).pop(str(channel.id), None)
-        save_economy()
-        print(f"BRAX: Refunded and cleared trade {channel.id} after its channel was deleted.")
-
-
-@bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         # Unknown commands such as b!daily are ignored instead of flooding logs.
