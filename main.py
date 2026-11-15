@@ -2366,6 +2366,9 @@ async def kick_command(ctx, member: discord.Member, *, reason: str = "No reason 
 async def ban_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await moderation_gate(ctx, "ban_members"):
         return
+    if consume_protection(ctx.guild.id, member.id, "ban"):
+        await ctx.reply(f"{EMOJIS['denied']} {member.mention} is protected from this ban. Charges left: {get_protection(ctx.guild.id, member.id, 'ban')}", mention_author=False)
+        return
     if member.id == ctx.author.id or member.bot:
         await ctx.reply(f"{EMOJIS['denied']} You can't ban yourself or a bot.", mention_author=False)
         return
@@ -3355,5 +3358,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: mining-trading-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation")
+print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation")
 bot.run(TOKEN)
