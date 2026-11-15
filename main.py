@@ -65,7 +65,7 @@ TICKET_EMOJIS = {
 }
 STAFF_ROLE_NAMES = {
     "developers", "senior admin", "admin", "trial admin",
-    "zinzicraftian admin", "senior moderator", "moderator",
+    "tfhsa admin", "senior moderator", "moderator",
     "trial moderator", "ingame admin", "ingame moderator",
 }
 DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS = {
@@ -111,6 +111,7 @@ economy_data.setdefault("company_invites", {})
 economy_data.setdefault("custom_coins", {})
 economy_data.setdefault("crypto_holdings", {})
 economy_data.setdefault("tfhsa_treasury", {})
+economy_data.setdefault("gamble_fraud_until", {})
 
 def save_economy():
     with open(ECONOMY_FILE, "w", encoding="utf-8") as file:
@@ -3004,8 +3005,32 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
     if amount < 1 or multiplier < 2 or multiplier > MAX_GAMBLE_MULTIPLIER:
         await ctx.reply(f"Use b!gamble <amount> <multiplier>. Multipliers range from 2x to {MAX_GAMBLE_MULTIPLIER}x. Example: b!gamble 100 15", mention_author=False)
         return
+    debt_key = economy_key(ctx.guild.id, ctx.author.id)
+    fraud_until = economy_data.setdefault("gamble_fraud_until", {})
+    now = time.time()
+    blocked_until = float(fraud_until.get(debt_key, 0))
+    if blocked_until > now:
+        remaining = max(1, int(blocked_until - now + 0.999))
+        await ctx.reply(f"🚨 TBR fraud restriction: gambling is disabled for you for **{remaining} more seconds**.", mention_author=False)
+        return
+    if blocked_until:
+        fraud_until.pop(debt_key, None)
+        save_economy()
+
     balance = coin_balance(ctx.guild.id, ctx.author.id)
-    # Every gamble must be fully covered by the player's current wallet.
+    # A failed 100M+ wager from a 100M+ wallet is treated as attempted debt fraud.
+    if balance >= 100_000_000 and amount >= 100_000_000 and amount > balance:
+        set_coin_balance(ctx.guild.id, ctx.author.id, 0)
+        fraud_until[debt_key] = now + 60
+        save_economy()
+        await ctx.reply(
+            f"🚨 **TBR FRAUD CHARGE** — You attempted a **{amount:,}** BRAX Coin wager without enough funds. "
+            f"TBR confiscated your entire **{balance:,}** coin wallet. Gambling is disabled for **1 minute**.",
+            mention_author=False,
+        )
+        return
+
+    # Every ordinary gamble must be fully covered by the player's current wallet.
     # High multipliers never allow borrowing or creating a negative balance.
     if balance < amount:
         balance_digits = len(str(abs(balance)))
