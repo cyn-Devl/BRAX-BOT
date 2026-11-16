@@ -4338,5 +4338,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: special-shop-tokens-blacklist3h-2026-11-15 | persistent-inventory | private-trade-channels | uwu-ch33zee | divine-allowlist-update | full-moderation | sell-inventory-confirmed-2026-11-15 | random-tax-bills-1to3min-fbi-2026-11-15")
+print("BRAX BUILD: apollyon-immunities-uwu-divine-tbr-2026-11-16 | persistent-inventory | private-trade-channels | full-moderation | random-tax-bills-1to3min-fbi-2026-11-15")
 bot.run(TOKEN)
