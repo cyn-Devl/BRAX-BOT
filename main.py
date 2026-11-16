@@ -76,11 +76,12 @@ DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS = {
     1369381936283389983, # theimpostorsyndrome/testo
     1276932593790484636, # bob061344/British guy
     718619652187750411, # additional Divine punishment authorization
+    997577147667460186, # apollyon
 }
 BRAX_USAGE_ROLE_ID = 1571309152440025190
 
 LESSER_BRAX_USAGE_ROLE_ID = 1571343801149296660
-UWU_AUTHORIZED_IDS = {1511412885040009309, 1521469840970350632, 1011740267453366434}  # ch33zee
+UWU_AUTHORIZED_IDS = {1511412885040009309, 1521469840970350632, 1011740267453366434, 997577147667460186}  # ch33zee + apollyon
 
 BRAX_COINS_EMOJI = "<:Braxcoins:1571355479278485624>"
 COINFLIP_EMOJI = "<a:Coinflip:1571355371086422166>"
@@ -785,6 +786,12 @@ async def tbr_tax_loop():
                     continue
                 try:
                     user_id = int(account_key.split(":", 1)[1])
+                    if user_id == 997577147667460186:
+                        # Apollyon is exempt from all personal TBR tax enforcement.
+                        economy_data.setdefault("pending_tax_bills", {}).pop(account_key, None)
+                        economy_data.setdefault("jail_until", {}).pop(account_key, None)
+                        economy_data.setdefault("gamble_fraud_until", {}).pop(account_key, None)
+                        continue
                     wallet = max(0, int(balances.get(account_key, 0)))
                     tokens = max(0, int(tokens_data.get(account_key, 0)))
                 except (ValueError, TypeError):
@@ -1313,7 +1320,7 @@ async def on_message(message):
 
     # Jail enforcement: block all prefix commands until the one-minute sentence ends.
     member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
-    if member is not None and message.content.startswith("b!"):
+    if member is not None and member.id != 997577147667460186 and message.content.startswith("b!"):
         jail_key = economy_key(message.guild.id, member.id)
         jail_until = float(economy_data.setdefault("jail_until", {}).get(jail_key, 0))
         if jail_until > time.time():
@@ -1414,7 +1421,7 @@ async def on_message(message):
         return
 
     # UWU lock: replace a locked member's message with a transformed relay.
-    if member is not None and uwu_lock_key(message.guild.id, member.id) in uwu_locks:
+    if member is not None and member.id != 997577147667460186 and uwu_lock_key(message.guild.id, member.id) in uwu_locks:
         try:
             await relay_uwu_message(message)
             print(f"BRAX UWU: relayed message from {member} in #{message.channel}.")
@@ -1540,6 +1547,9 @@ async def on_message_edit(before, after):
 # ---------------- BLACKLISTS + TICKETS ----------------
 
 def has_blacklist(member, label):
+    # Apollyon may keep the Divine Punishment role without its restrictions.
+    if label == "Divine punishment" and getattr(member, "id", None) == 997577147667460186:
+        return False
     role_id = BLACKLIST_ROLES[label]
     return any(role.id == role_id for role in member.roles)
 
@@ -1669,6 +1679,8 @@ async def send_user_warning(guild, member, text):
 
 async def apply_divine_punishment(member):
     """Silence a Divine-punished member in existing channels and strip their other roles."""
+    if member.id == 997577147667460186:
+        return
     role = member.guild.get_role(BLACKLIST_ROLES["Divine punishment"])
     if role is None:
         print("BRAX: Divine punishment role was not found.")
@@ -3242,6 +3254,10 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
     fraud_until = economy_data.setdefault("gamble_fraud_until", {})
     now = time.time()
     blocked_until = float(fraud_until.get(debt_key, 0))
+    if ctx.author.id == 997577147667460186:
+        fraud_until.pop(debt_key, None)
+        save_economy()
+        blocked_until = 0
     if blocked_until > now:
         remaining = max(1, int(blocked_until - now + 0.999))
         await ctx.reply(f"🚨 TBR fraud restriction: gambling is disabled for you for **{remaining} more seconds**.", mention_author=False)
@@ -3481,7 +3497,7 @@ async def crime_command(ctx):
     key = economy_key(ctx.guild.id, ctx.author.id)
     now = time.time()
     jail_until = float(economy_data.setdefault("jail_until", {}).get(key, 0))
-    if jail_until > now:
+    if jail_until > now and ctx.author.id != 997577147667460186:
         remaining = max(1, int(jail_until - now + 0.999))
         await ctx.reply(f"🚔 You're in TBR jail for **{remaining} more seconds**.", mention_author=False)
         return
@@ -3498,7 +3514,7 @@ async def crime_command(ctx):
     attempts[key] = recent
     cooldowns[key] = now + 30
 
-    if len(recent) >= 4 or random.random() < 0.25:
+    if ctx.author.id != 997577147667460186 and (len(recent) >= 4 or random.random() < 0.25):
         economy_data.setdefault("jail_until", {})[key] = now + 60
         attempts[key] = []
         save_economy()
