@@ -4419,7 +4419,7 @@ print("BRAX BUILD: discord-429-login-backoff-2026-11-16 | ticket-interaction-ack
 
 async def run_brax_with_login_backoff():
     # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
-    # Avoid crashing and triggering rapid Wispbyte restarts when Discord returns 429.
+    # Close the HTTP session after each failed login before waiting and retrying.
     retry_delays = (600, 1800, 3600)  # 10 minutes, then 30 minutes, then 1 hour
     retry_number = 0
 
@@ -4428,17 +4428,27 @@ async def run_brax_with_login_backoff():
             await bot.start(TOKEN)
             return
         except discord.HTTPException as error:
+            # bot.start() can create an aiohttp session before login fails.
+            # Close it to prevent "Unclosed client session" warnings.
+            await bot.close()
             if error.status != 429:
                 raise
+
+            # discord.py clients can be reopened after close() by clearing state.
+            bot.clear()
 
             delay = retry_delays[min(retry_number, len(retry_delays) - 1)]
             retry_number += 1
             print(
                 f"BRAX Discord login was rate-limited (HTTP 429). "
-                f"Waiting {delay // 60} minutes before retrying. "
+                f"HTTP session closed. Waiting {delay // 60} minutes before retrying. "
                 f"This is a Discord/Cloudflare access restriction, not a bot command error."
             )
             await asyncio.sleep(delay)
+        except BaseException:
+            # Also clean up the HTTP session if startup fails for another reason.
+            await bot.close()
+            raise
 
 
 asyncio.run(run_brax_with_login_backoff())
