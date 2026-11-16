@@ -1861,7 +1861,7 @@ class BlacklistSelect(discord.ui.Select):
         if is_divine:
             if not is_divine_authorized:
                 await interaction.response.send_message(
-                    "Only the seven specifically authorized users can assign or remove Divine punishment.",
+                    "Only specifically authorized users can assign or remove Divine punishment.",
                     ephemeral=True,
                 )
                 return
@@ -2512,7 +2512,7 @@ async def fake_mute_command(ctx, member: discord.Member):
 @bot.command(name="uwu")
 async def uwu_command(ctx, member: discord.Member):
     if not is_uwu_authorized(ctx.author):
-        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner, Braxton, and ch33zee can use UWU lock.", mention_author=False)
+        await ctx.reply(f"{EMOJIS['denied']} Only authorized users can use UWU lock.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_messages:
         await ctx.reply(f"{EMOJIS['denied']} You need Manage Messages to use UWU lock.", mention_author=False)
@@ -2572,7 +2572,7 @@ class UwuListView(discord.ui.View):
 
     async def interaction_check(self, interaction):
         if not is_uwu_authorized(interaction.user):
-            await interaction.response.send_message("Only the bot owner, Braxton, and ch33zee can manage UWU locks.", ephemeral=True)
+            await interaction.response.send_message("Only authorized users can manage UWU locks.", ephemeral=True)
             return False
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("Only the person who opened this list can use its controls.", ephemeral=True)
@@ -2610,7 +2610,7 @@ class UwuListView(discord.ui.View):
 @bot.command(name="uwulist")
 async def uwu_list_command(ctx):
     if not is_uwu_authorized(ctx.author):
-        await ctx.reply(f"{EMOJIS['denied']} Only the bot owner, Braxton, and ch33zee can view or manage UWU locks.", mention_author=False)
+        await ctx.reply(f"{EMOJIS['denied']} Only authorized users can view or manage UWU locks.", mention_author=False)
         return
     prefix = f"{ctx.guild.id}:"
     locked_ids = []
