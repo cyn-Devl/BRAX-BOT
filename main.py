@@ -434,6 +434,16 @@ def is_high_staff(member):
     return any(role.id == BRAX_USAGE_ROLE_ID for role in member.roles)
 
 
+def can_manage_tickets(member):
+    """Ticket staff, BRAX Usage holders, and server managers can manage tickets."""
+    return (
+        is_high_staff(member)
+        or any(role.id == TICKET_STAFF_ROLE_ID for role in member.roles)
+        or member.guild_permissions.manage_channels
+        or member.guild_permissions.administrator
+    )
+
+
 def is_staff_role(role):
     if role.id in STAFF_ROLE_IDS:
         return True
@@ -2139,8 +2149,8 @@ async def build_ticket_transcript(channel):
 
 
 async def close_ticket_channel(interaction, reason=None):
-    if not is_high_staff(interaction.user):
-        await interaction.response.send_message("You need the BRAX Usage role to close tickets with BRAX.", ephemeral=True)
+    if not can_manage_tickets(interaction.user):
+        await interaction.response.send_message("You need the Ticket Staff role, BRAX Usage, or Manage Channels permission to close tickets.", ephemeral=True)
         return
     channel = interaction.channel
     if not isinstance(channel, discord.TextChannel) or channel.category_id != TICKET_CATEGORY_ID:
@@ -2243,8 +2253,8 @@ class TicketControlsView(discord.ui.View):
         custom_id="brax:tickets:claim",
     )
     async def claim(self, interaction, button):
-        if not is_high_staff(interaction.user):
-            await interaction.response.send_message("You need the BRAX Usage role to claim tickets with BRAX.", ephemeral=True)
+        if not can_manage_tickets(interaction.user):
+            await interaction.response.send_message("You need the Ticket Staff role, BRAX Usage, or Manage Channels permission to claim tickets.", ephemeral=True)
             return
         if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
             await interaction.response.send_message("This isn't a ticket channel.", ephemeral=True)
@@ -2270,8 +2280,8 @@ class TicketControlsView(discord.ui.View):
         custom_id="brax:tickets:close_reason",
     )
     async def close_reason(self, interaction, button):
-        if not is_high_staff(interaction.user):
-            await interaction.response.send_message("You need the BRAX Usage role to close tickets with BRAX.", ephemeral=True)
+        if not can_manage_tickets(interaction.user):
+            await interaction.response.send_message("You need the Ticket Staff role, BRAX Usage, or Manage Channels permission to close tickets.", ephemeral=True)
             return
         await interaction.response.send_modal(CloseReasonModal())
 
@@ -2282,13 +2292,14 @@ class TicketControlsView(discord.ui.View):
         custom_id="brax:tickets:close",
     )
     async def close(self, interaction, button):
-        if not is_high_staff(interaction.user):
-            await interaction.response.send_message("You need the BRAX Usage role to close tickets with BRAX.", ephemeral=True)
+        if not can_manage_tickets(interaction.user):
+            await interaction.response.send_message("You need the Ticket Staff role, BRAX Usage, or Manage Channels permission to close tickets.", ephemeral=True)
             return
         if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
             await interaction.response.send_message("This isn't a ticket channel.", ephemeral=True)
             return
-        await interaction.response.send_modal(CloseReasonModal())
+        # The plain Close button closes immediately; use "Close with a reason" when a reason is needed.
+        await close_ticket_channel(interaction, "Closed by staff.")
 
 
 
@@ -3552,10 +3563,17 @@ async def work_command(ctx):
         return
     low, high, _ = JOB_DEFINITIONS[job]
     pay = random.randint(low, high)
+    pp_pay = random.randint(1, 3)
     economy_data["work_cooldowns"][key] = now + 600
     add_coins(ctx.guild.id, ctx.author.id, pay)
+    pp_wallet = economy_data.setdefault("political_power", {})
+    pp_wallet[key] = int(pp_wallet.get(key, 0)) + pp_pay
     save_economy()
-    await ctx.reply(f"Shift complete! Your {job.title()} job paid {pay} {BRAX_COINS_EMOJI}.", mention_author=False)
+    await ctx.reply(
+        f"Shift complete! Your {job.title()} job paid {pay} {BRAX_COINS_EMOJI} "
+        f"and **{pp_pay} Political Power**.",
+        mention_author=False,
+    )
 
 
 def company_key(guild_id, owner_id):
@@ -3636,11 +3654,35 @@ async def personal_bank_command(ctx, action: str, *, details: str = ""):
     await ctx.reply(f"{action.title()}ed {amount:,} {asset.replace('_', ' ')} {direction} your personal bank. Banked assets are exempt from personal-wallet TBR taxes.", mention_author=False)
 
 
-@bot.command(name="politicalpower")
+@bot.command(name="politicalpower", aliases=["pp"])
 async def political_power_command(ctx):
     bank = personal_bank_for(ctx.guild.id, ctx.author.id)
     wallet = int(economy_data.setdefault("political_power", {}).get(economy_key(ctx.guild.id, ctx.author.id), 0))
-    await ctx.reply(f"Political Power wallet: **{wallet:,}** | Personal bank: **{int(bank.get('political_power', 0)):,}**", mention_author=False)
+    await ctx.reply(
+        f"Political Power wallet: **{wallet:,}** | Personal bank: **{int(bank.get('political_power', 0)):,}**\n"
+        "Earn more with **b!ppdaily** (every 24 hours) or **b!work** (bonus PP each shift).",
+        mention_author=False,
+    )
+
+
+@bot.command(name="ppdaily", aliases=["politicaldaily"])
+async def political_power_daily_command(ctx):
+    key = economy_key(ctx.guild.id, ctx.author.id)
+    cooldowns = economy_data.setdefault("pp_daily_cooldowns", {})
+    now = time.time()
+    ready = float(cooldowns.get(key, 0))
+    if now < ready:
+        remaining = max(1, int(ready - now + 0.999))
+        hours, remainder = divmod(remaining, 3600)
+        minutes = remainder // 60
+        await ctx.reply(f"Your next Political Power claim is ready in **{hours}h {minutes}m**.", mention_author=False)
+        return
+    reward = random.randint(8, 15)
+    wallet = economy_data.setdefault("political_power", {})
+    wallet[key] = int(wallet.get(key, 0)) + reward
+    cooldowns[key] = now + 86400
+    save_economy()
+    await ctx.reply(f"🏛️ Daily claim: you earned **{reward} Political Power**. New wallet: **{wallet[key]:,} PP**. Come back in 24 hours.", mention_author=False)
 
 
 @bot.command(name="company")
@@ -4338,5 +4380,5 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: apollyon-immunities-uwu-divine-tbr-2026-11-16 | persistent-inventory | private-trade-channels | full-moderation | random-tax-bills-1to3min-fbi-2026-11-15")
+print("BRAX BUILD: tickets-close-fix-ticket-staff-permissions-pp-earning-2026-11-16 | apollyon-immunities | persistent-inventory | private-trade-channels | full-moderation | random-tax-bills-1to3min-fbi-2026-11-15")
 bot.run(TOKEN)
