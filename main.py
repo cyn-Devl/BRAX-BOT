@@ -2319,15 +2319,22 @@ class TicketControlsView(discord.ui.View):
         custom_id="brax:tickets:close",
     )
     async def close(self, interaction, button):
-        if not can_manage_tickets(interaction.user):
-            await interaction.response.send_message("You need the Ticket Staff role, BRAX Usage, or Manage Channels permission to close tickets.", ephemeral=True)
-            return
-        if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
-            await interaction.response.send_message("This isn't a ticket channel.", ephemeral=True)
-            return
-        # Acknowledge the button immediately so Discord never reports an interaction timeout.
+        # Acknowledge immediately before permission checks or any network operations.
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await close_ticket_channel(interaction, "Closed by staff.", already_deferred=True)
+        try:
+            if not can_manage_tickets(interaction.user):
+                await interaction.followup.send("You need the Ticket Staff role, BRAX Usage, or Manage Channels permission to close tickets.", ephemeral=True)
+                return
+            if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.category_id != TICKET_CATEGORY_ID:
+                await interaction.followup.send("This isn't a ticket channel.", ephemeral=True)
+                return
+            await close_ticket_channel(interaction, "Closed by staff.", already_deferred=True)
+        except Exception as error:
+            print(f"BRAX close button callback error: {type(error).__name__}: {error}")
+            try:
+                await interaction.followup.send(f"BRAX couldn't finish closing this ticket ({type(error).__name__}). Check the Wispbyte console.", ephemeral=True)
+            except Exception as response_error:
+                print(f"BRAX close button response error: {type(response_error).__name__}: {response_error}")
 
 
 
