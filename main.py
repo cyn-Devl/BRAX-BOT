@@ -4415,5 +4415,30 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: ticket-interaction-ack-error-handling-2026-11-16 | tickets-close-fix | pp-earning | apollyon-immunities | persistent-inventory | full-moderation")
-bot.run(TOKEN)
+print("BRAX BUILD: discord-429-login-backoff-2026-11-16 | ticket-interaction-ack-error-handling | tickets-close-fix | pp-earning | apollyon-immunities | persistent-inventory | full-moderation")
+
+async def run_brax_with_login_backoff():
+    # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
+    # Avoid crashing and triggering rapid Wispbyte restarts when Discord returns 429.
+    retry_delays = (600, 1800, 3600)  # 10 minutes, then 30 minutes, then 1 hour
+    retry_number = 0
+
+    while True:
+        try:
+            await bot.start(TOKEN)
+            return
+        except discord.HTTPException as error:
+            if error.status != 429:
+                raise
+
+            delay = retry_delays[min(retry_number, len(retry_delays) - 1)]
+            retry_number += 1
+            print(
+                f"BRAX Discord login was rate-limited (HTTP 429). "
+                f"Waiting {delay // 60} minutes before retrying. "
+                f"This is a Discord/Cloudflare access restriction, not a bot command error."
+            )
+            await asyncio.sleep(delay)
+
+
+asyncio.run(run_brax_with_login_backoff())
