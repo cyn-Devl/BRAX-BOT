@@ -313,6 +313,13 @@ try:
 except (OSError, json.JSONDecodeError):
     moderation_history = {}
 
+WARNINGS_FILE = "warnings.json"
+try:
+    with open(WARNINGS_FILE, "r", encoding="utf-8") as file:
+        warnings_data = json.load(file)
+except (OSError, json.JSONDecodeError):
+    warnings_data = {}
+
 UWU_LOCKS_FILE = "uwu_locks.json"
 try:
     with open(UWU_LOCKS_FILE, "r", encoding="utf-8") as file:
@@ -388,7 +395,15 @@ bot = commands.Bot(command_prefix="b!", intents=intents, help_command=None)
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
-        # Unknown commands such as b!daily are ignored instead of flooding logs.
+        attempted = (ctx.message.content or "").strip()
+        remainder = attempted[len(ctx.prefix):] if ctx.prefix and attempted.startswith(ctx.prefix) else "unknown"
+        attempted = remainder.split()[0] if remainder.split() else "unknown"
+        embed = discord.Embed(
+            title="❌ Command not found",
+            description=f"There's no command called `{shorten(attempted, 80)}`.",
+            color=discord.Color.red(),
+        )
+        await ctx.reply(embed=embed, mention_author=False)
         return
     if isinstance(error, commands.BadArgument):
         await ctx.reply(
@@ -1210,6 +1225,8 @@ async def on_member_update(before, after):
         else:
             blacklist_assignments.pop(key, None)
             save_blacklist_assignments()
+            if role.id == BLACKLIST_ROLES["Divine punishment"]:
+                await clear_divine_member_overwrites(after)
             if actor is not None:
                 await log_brax_action(
                     after.guild, after, actor,
@@ -1364,6 +1381,9 @@ async def on_message(message):
             "stealtokens", "jobs", "job", "work", "company", "cryptocreate",
             "cryptomarket", "cryptobuy", "cryptosell",
         }
+        allowed_lesser_commands.update({"coinflip", "flip"})
+        if command_name is None:
+            return
         if command_name not in allowed_lesser_commands:
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
@@ -1723,6 +1743,8 @@ async def apply_divine_punishment(member):
         role_overwrite.create_public_threads = False
         role_overwrite.create_private_threads = False
         role_overwrite.use_application_commands = False
+        role_overwrite.connect = False
+        role_overwrite.speak = False
         member_overwrite = channel.overwrites_for(member)
         member_overwrite.send_messages = False
         member_overwrite.send_messages_in_threads = False
@@ -1730,6 +1752,8 @@ async def apply_divine_punishment(member):
         member_overwrite.create_public_threads = False
         member_overwrite.create_private_threads = False
         member_overwrite.use_application_commands = False
+        member_overwrite.connect = False
+        member_overwrite.speak = False
         try:
             await channel.set_permissions(
                 role, overwrite=role_overwrite,
@@ -1741,6 +1765,37 @@ async def apply_divine_punishment(member):
             )
         except discord.HTTPException as error:
             print(f"BRAX: Could not restrict Divine punishment in {channel}: {error}")
+
+
+async def clear_divine_member_overwrites(member):
+    """Remove BRAX's explicit member-level Divine Punishment denies after removal."""
+    fields = (
+        "send_messages", "send_messages_in_threads", "add_reactions",
+        "create_public_threads", "create_private_threads",
+        "use_application_commands", "connect", "speak",
+    )
+    for channel in member.guild.channels:
+        if not isinstance(channel, (
+            discord.TextChannel, discord.ForumChannel, discord.CategoryChannel,
+            discord.VoiceChannel, discord.StageChannel,
+        )):
+            continue
+        overwrite = channel.overwrites_for(member)
+        changed = False
+        for field in fields:
+            if getattr(overwrite, field, None) is False:
+                setattr(overwrite, field, None)
+                changed = True
+        if not changed:
+            continue
+        try:
+            await channel.set_permissions(
+                member,
+                overwrite=None if overwrite.is_empty() else overwrite,
+                reason="BRAX Divine punishment removed: clear member-level restrictions",
+            )
+        except discord.HTTPException as error:
+            print(f"BRAX: Could not clear Divine member overwrite in {channel}: {error}")
 
 
 async def apply_suggestion_restriction(member):
@@ -2375,6 +2430,143 @@ async def moderation_gate(ctx, permission_name):
     return True
 
 
+@bot.command(name="warn")
+async def warn_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if not await moderation_gate(ctx, "moderate_members"):
+        return
+    if member.bot or member.id == ctx.author.id or member.guild_permissions.administrator:
+        await ctx.reply(f"{EMOJIS['denied']} Choose a different member.", mention_author=False)
+        return
+    entries = warnings_data.setdefault(str(ctx.guild.id), {}).setdefault(str(member.id), [])
+    case_id = max((int(item.get("case_id", 0)) for item in entries), default=0) + 1
+    entries.append({
+        "case_id": case_id,
+        "reason": shorten(reason, 1000),
+        "moderator_id": ctx.author.id,
+        "moderator": str(ctx.author),
+        "created_at": discord.utils.utcnow().isoformat(),
+    })
+    with open(WARNINGS_FILE, "w", encoding="utf-8") as file:
+        json.dump(warnings_data, file, ensure_ascii=False, indent=2)
+    embed = discord.Embed(
+        title=f"{EMOJIS['confirmed']} {member} warned",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="Reason", value=shorten(reason, 1024), inline=False)
+    embed.add_field(name="Duration", value="Permanent", inline=True)
+    embed.add_field(name="Case ID", value=str(case_id), inline=True)
+    embed.set_footer(text=f"Moderator: {ctx.author}")
+    await ctx.reply(embed=embed, mention_author=False)
+    await log_brax_action(ctx.guild, member, ctx.author, "Warned", reason, "Permanent")
+
+
+@bot.command(name="unwarn")
+async def unwarn_command(ctx, member: discord.Member, case_id: int = None):
+    if not await moderation_gate(ctx, "moderate_members"):
+        return
+    guild_warnings = warnings_data.setdefault(str(ctx.guild.id), {})
+    entries = guild_warnings.setdefault(str(member.id), [])
+    if not entries:
+        await ctx.reply(f"{EMOJIS['denied']} {member.mention} has no active warnings.", mention_author=False)
+        return
+    selected = entries[-1] if case_id is None else next(
+        (item for item in entries if int(item.get("case_id", 0)) == case_id), None
+    )
+    if selected is None:
+        await ctx.reply(f"{EMOJIS['denied']} Warning case not found.", mention_author=False)
+        return
+    entries.remove(selected)
+    if not entries:
+        guild_warnings.pop(str(member.id), None)
+    with open(WARNINGS_FILE, "w", encoding="utf-8") as file:
+        json.dump(warnings_data, file, ensure_ascii=False, indent=2)
+    embed = discord.Embed(
+        title=f"{EMOJIS['confirmed']} Warning removed",
+        description=f"Removed warning **#{selected['case_id']}** from {member.mention}.",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text=f"Moderator: {ctx.author}")
+    await ctx.reply(embed=embed, mention_author=False)
+    await log_brax_action(ctx.guild, member, ctx.author, "Unwarned", f"Removed warning case #{selected['case_id']}")
+
+
+@bot.command(name="lock")
+async def lock_command(ctx, channel: discord.TextChannel = None, *, reason: str = "Channel locked by moderator"):
+    if not await moderation_gate(ctx, "manage_channels"):
+        return
+    channel = channel or ctx.channel
+    if not isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+        await ctx.reply(f"{EMOJIS['denied']} Choose a text or forum channel.", mention_author=False)
+        return
+    overwrite = channel.overwrites_for(ctx.guild.default_role)
+    overwrite.send_messages = False
+    overwrite.create_public_threads = False
+    overwrite.create_private_threads = False
+    overwrite.send_messages_in_threads = False
+    try:
+        await channel.set_permissions(ctx.guild.default_role, overwrite=overwrite, reason=f"{ctx.author}: {reason}")
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Could not lock {channel.mention}: {error}", mention_author=False)
+        return
+    embed = discord.Embed(title=f"{EMOJIS['confirmed']} Channel locked", description=f"{channel.mention} has been locked.\nReason: {reason}", color=discord.Color.green())
+    await ctx.reply(embed=embed, mention_author=False)
+    await log_brax_action(ctx.guild, ctx.author, ctx.author, "Channel Locked", f"{channel.name}: {reason}")
+
+
+@bot.command(name="unlock")
+async def unlock_command(ctx, channel: discord.TextChannel = None, *, reason: str = "Channel unlocked by moderator"):
+    if not await moderation_gate(ctx, "manage_channels"):
+        return
+    channel = channel or ctx.channel
+    if not isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+        await ctx.reply(f"{EMOJIS['denied']} Choose a text or forum channel.", mention_author=False)
+        return
+    overwrite = channel.overwrites_for(ctx.guild.default_role)
+    overwrite.send_messages = None
+    overwrite.create_public_threads = None
+    overwrite.create_private_threads = None
+    overwrite.send_messages_in_threads = None
+    try:
+        await channel.set_permissions(
+            ctx.guild.default_role,
+            overwrite=None if overwrite.is_empty() else overwrite,
+            reason=f"{ctx.author}: {reason}",
+        )
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Could not unlock {channel.mention}: {error}", mention_author=False)
+        return
+    embed = discord.Embed(title=f"{EMOJIS['confirmed']} Channel unlocked", description=f"{channel.mention} has been unlocked.\nReason: {reason}", color=discord.Color.green())
+    await ctx.reply(embed=embed, mention_author=False)
+    await log_brax_action(ctx.guild, ctx.author, ctx.author, "Channel Unlocked", f"{channel.name}: {reason}")
+
+
+@bot.command(name="purge", aliases=["clear"])
+async def purge_command(ctx, amount: int):
+    if not await moderation_gate(ctx, "manage_messages"):
+        return
+    if not 1 <= amount <= 100:
+        await ctx.reply(f"{EMOJIS['denied']} Choose a number from 1 to 100.", mention_author=False)
+        return
+    try:
+        deleted = await ctx.channel.purge(limit=amount + 1, reason=f"Bulk purge by {ctx.author}")
+    except discord.Forbidden:
+        await ctx.reply(f"{EMOJIS['denied']} I need Manage Messages and Read Message History.", mention_author=False)
+        return
+    except discord.HTTPException as error:
+        await ctx.reply(f"{EMOJIS['denied']} Purge failed: {error}", mention_author=False)
+        return
+    count = max(0, len(deleted) - 1)
+    embed = discord.Embed(
+        title=f"{EMOJIS['confirmed']} Deleted {count} messages",
+        color=discord.Color.green(),
+        timestamp=discord.utils.utcnow(),
+    )
+    await ctx.send(embed=embed, delete_after=6)
+    await log_brax_action(ctx.guild, ctx.author, ctx.author, "Messages Purged", f"Deleted {count} messages in #{ctx.channel.name}")
+
+
 async def send_moderation_result(ctx, action, target, reason, duration=None, color=None):
     await log_brax_action(ctx.guild, target, ctx.author, action, reason, duration)
 
@@ -2960,10 +3152,9 @@ async def ticket_panel_command(ctx):
 # BRAX Coins economy and fun games. Coins are virtual server points only.
 SHOP_ITEMS = {
     "lesser": (50, "Lesser BRAX Usage"),
-    "usage": (7500, "BRAX Usage (staff review)"),
+    "usage": (24_000_000, "BRAX Usage (staff review)"),
     "unblacklist": (40, "regular blacklist removal"),
     "divine": (450, "Divine punishment removal (staff review)"),
-    "customrole": (500, "custom role"),
 }
 
 @bot.command(name="balance", aliases=["bal", "coins"])
@@ -3002,10 +3193,9 @@ class BraxShopView(discord.ui.View):
             description = (
                 "Earn 1 BRAX Coin every 10 messages.\n\n"
                 "50 Coins — Lesser BRAX Usage: b!buy lesser\n"
-                "7,500 Coins — BRAX Usage (staff review): b!buy usage\n"
+                "24,000,000 Coins — BRAX Usage (staff review): b!buy usage\n"
                 "40 Coins — Remove one regular blacklist: b!buy unblacklist\n"
-                "450 Coins — Divine punishment removal (staff review): b!buy divine\n"
-                "500 Coins — Custom role: b!buy customrole\n\n"
+                "450 Coins — Divine punishment removal (staff review): b!buy divine\n\n"
                 "Use Forward for the Special Shop."
             )
         else:
@@ -3014,7 +3204,6 @@ class BraxShopView(discord.ui.View):
                 "50 BRAX Coins = 1 BRAX Token. Use b!convert; extra coins remain. Check with b!tokens.\n\n"
                 "5 Tokens — b!blacklist unlock: 3 uses; each regular blacklist lasts 3 hours.\n"
                 "2 Tokens for 2× luck, 8 for 4×, 64 for 8×, 4,096 for 16×; prices keep increasing.\n"
-                "5 Tokens — Custom role with selected safe permissions: b!specialbuy customrole Name | permissions.\n"
                 "3 Tokens — 3 kick-protection charges.\n"
                 "20 Tokens — 1 ban-protection charge.\n"
                 "10 Tokens — Attempt to steal up to 10 tokens: b!stealtokens @member.\n"
@@ -3066,9 +3255,9 @@ async def tokens_command(ctx, member: discord.Member = None):
 @bot.command(name="specialbuy")
 async def special_buy_command(ctx, item: str, *, details: str = ""):
     item = item.casefold().replace("-", "").replace("_", "")
-    aliases = {"gambleluck": "luck", "kickshield": "kickprotection", "banshield": "banprotection", "role": "customrole", "tokenimmunity": "stealimmunity"}
+    aliases = {"gambleluck": "luck", "kickshield": "kickprotection", "banshield": "banprotection", "tokenimmunity": "stealimmunity"}
     item = aliases.get(item, item)
-    prices = {"blacklist": 5, "kickprotection": 3, "banprotection": 20, "customrole": 5, "stealimmunity": 100}
+    prices = {"blacklist": 5, "kickprotection": 3, "banprotection": 20, "stealimmunity": 100}
     if item not in prices and item != "luck":
         await ctx.reply("Unknown special item. Check page 2 of b!shop.", mention_author=False)
         return
@@ -3082,30 +3271,7 @@ async def special_buy_command(ctx, item: str, *, details: str = ""):
         return
 
     if item == "customrole":
-        if "|" not in details:
-            await ctx.reply("Use b!specialbuy customrole Role Name | view_channel, send_messages, read_message_history, attach_files, embed_links, add_reactions", mention_author=False)
-            return
-        name, permission_text = [part.strip() for part in details.split("|", 1)]
-        allowed = {"view_channel", "send_messages", "read_message_history", "attach_files", "embed_links", "use_application_commands", "add_reactions"}
-        selected = {part.strip().casefold() for part in permission_text.split(",") if part.strip()}
-        if not name or not selected or not selected.issubset(allowed):
-            await ctx.reply("Invalid role name or permissions. Administrator and moderation permissions aren't available.", mention_author=False)
-            return
-        if not ctx.guild.me.guild_permissions.manage_roles:
-            await ctx.reply("I need Manage Roles. No tokens spent.", mention_author=False)
-            return
-        spend_tokens(ctx.guild.id, ctx.author.id, price)
-        try:
-            perms = discord.Permissions.none()
-            for permission in selected:
-                setattr(perms, permission, True)
-            role = await ctx.guild.create_role(name=shorten(name, 80), permissions=perms, reason="BRAX Special Shop custom role")
-            await ctx.author.add_roles(role, reason="BRAX Special Shop custom role")
-        except discord.HTTPException:
-            add_tokens(ctx.guild.id, ctx.author.id, price)
-            await ctx.reply("Role creation failed; your tokens were returned.", mention_author=False)
-            return
-        await ctx.reply(f"Created {role.mention} with {', '.join(sorted(selected))}.", mention_author=False)
+        await ctx.reply("Custom role purchases have been removed from the BRAX shop.", mention_author=False)
         return
 
     if not spend_tokens(ctx.guild.id, ctx.author.id, price):
@@ -3155,7 +3321,7 @@ async def steal_tokens_command(ctx, member: discord.Member):
 @bot.command(name="buy")
 async def buy_command(ctx, item: str, *, details: str = ""):
     item = item.casefold().replace("-", "").replace("_", "")
-    aliases = {"lesserusage": "lesser", "braxusage": "usage", "blacklist": "unblacklist", "divinepunishment": "divine", "custom": "customrole", "role": "customrole"}
+    aliases = {"lesserusage": "lesser", "braxusage": "usage", "blacklist": "unblacklist", "divinepunishment": "divine"}
     item = aliases.get(item, item)
     if item not in SHOP_ITEMS:
         await ctx.reply("Unknown item. Use b!shop.", mention_author=False)
@@ -3184,28 +3350,7 @@ async def buy_command(ctx, item: str, *, details: str = ""):
         return
 
     if item == "customrole":
-        name = details.strip()
-        if not name:
-            await ctx.reply("What should the role be called? Reply within 60 seconds.", mention_author=False)
-            try:
-                answer = await bot.wait_for("message", timeout=60, check=lambda m: m.author.id == ctx.author.id and m.channel.id == ctx.channel.id)
-                name = answer.content.strip()
-            except asyncio.TimeoutError:
-                await ctx.reply("Timed out. No coins were spent.", mention_author=False)
-                return
-        name = shorten(name, 80).strip()
-        if not name or not ctx.guild.me.guild_permissions.manage_roles:
-            await ctx.reply("Invalid name or I need Manage Roles. No coins spent.", mention_author=False)
-            return
-        spend_coins(ctx.guild.id, ctx.author.id, price)
-        try:
-            role = await ctx.guild.create_role(name=name, reason=f"BRAX Coins custom role for {ctx.author}")
-            await ctx.author.add_roles(role, reason="Custom role purchase")
-        except discord.HTTPException:
-            add_coins(ctx.guild.id, ctx.author.id, price)
-            await ctx.reply("I couldn't create or assign that role. Your coins were returned.", mention_author=False)
-            return
-        await ctx.reply(f"Created and assigned {role.mention} for {price} {BRAX_COINS_EMOJI}.", mention_author=False)
+        await ctx.reply("Custom role purchases have been removed from the BRAX shop.", mention_author=False)
         return
 
     if item == "unblacklist":
@@ -4252,6 +4397,9 @@ HELP_PAGES = [
             "`b!kick @user [reason]` — Kick a mentioned member. Requires Kick Members.\n"
             "`b!ban @user [reason]` — Ban a mentioned member. Requires Ban Members.\n"
             "`b!unban userID [reason]` — Unban by user ID. Requires Ban Members.\n"
+            "`b!warn @user reason` / `b!unwarn @user [case ID]` — Add or remove a permanent warning. Requires Moderate Members.\n"
+            "`b!lock [#channel]` / `b!unlock [#channel]` — Lock or unlock a text channel. Requires Manage Channels.\n"
+            "`b!purge 1-100` — Delete recent messages. Requires Manage Messages.\n"
             "`b!roleadd @user @role [reason]` — Give a role. Requires Manage Roles and member/role mentions.\n"
             "`b!roleremove @user @role [reason]` — Remove a role. Requires Manage Roles and member/role mentions."
         ),
@@ -4402,7 +4550,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
         description="Commands available to members with the BRAX Usage role:",
         color=discord.Color.from_rgb(58, 48, 35),
     )
-    embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!roleadd, b!roleremove", inline=False)
+    embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!warn, b!unwarn, b!lock, b!unlock, b!purge, b!roleadd, b!roleremove", inline=False)
     embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
     embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!lusageadd @user, b!help, /help", inline=False)
     embed.add_field(name="Fun, Economy & Mining", value="b!mweute, b!uwu, b!balance, b!shop, b!buy, b!coinflip, b!gamble, b!coinlb, b!stocks, b!mine, b!inventory, b!sell, b!trade", inline=False)
@@ -4415,7 +4563,7 @@ if not TOKEN:
         "server's working directory and contains BOT_TOKEN=your_token."
     )
 
-print("BRAX BUILD: discord-429-login-backoff-2026-11-16 | ticket-interaction-ack-error-handling | tickets-close-fix | pp-earning | apollyon-immunities | persistent-inventory | full-moderation")
+print("BRAX BUILD: bot-hosting-migration-ready | sapphire-style-warn-purge | channel-locks | final-blacklist-overwrite-cleanup | no-custom-role-sales | usage-price-24000000 | lesser-gambling-role-protection | discord-429-login-backoff")
 
 async def run_brax_with_login_backoff():
     # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
