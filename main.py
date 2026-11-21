@@ -1382,9 +1382,7 @@ async def on_message(message):
             "cryptomarket", "cryptobuy", "cryptosell",
         }
         allowed_lesser_commands.update({"coinflip", "flip"})
-        if command_name is None:
-            return
-        if command_name not in allowed_lesser_commands:
+        if command_name is not None and command_name not in allowed_lesser_commands:
             strikes = lesser_usage_state.setdefault("strikes", {})
             count = int(strikes.get(str(member.id), 0)) + 1
             strikes[str(member.id)] = count
