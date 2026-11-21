@@ -14,9 +14,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-# Load Wispbyte's .env file before reading any environment variables.
-# With the server working directory set to /home/container, this loads
-# /home/container/.env without hard-coding a hosting-specific path.
+# Load environment variables from a local .env file when one is provided.
+# Hosting panels can also inject BOT_TOKEN directly as an environment variable.
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -4557,8 +4556,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
 
 if not TOKEN:
     raise RuntimeError(
-        "BOT_TOKEN is missing. Check that Wispbyte's .env file is in the "
-        "server's working directory and contains BOT_TOKEN=your_token."
+        "BOT_TOKEN is missing. Add BOT_TOKEN to your hosting panel's environment variables."
     )
 
 print("BRAX BUILD: bot-hosting-migration-ready | sapphire-style-warn-purge | channel-locks | final-blacklist-overwrite-cleanup | no-custom-role-sales | usage-price-24000000 | lesser-gambling-role-protection | discord-429-login-backoff")
