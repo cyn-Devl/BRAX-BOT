@@ -4356,7 +4356,6 @@ HELP_PAGES = [
             "`/balance [@user]` — Check coins. `/shop` / `/store` — View the store. "
             "`/buy` — Purchase store items. `/pay <amount>` — Pay a BRAX Coin tax bill; `/pay tokens <amount>` — Pay a Token tax bill.\n"
             "FBI tax bills have a random 1–3 minute deadline; missed bills trigger an 85–100% wallet seizure, and the bill remains due.\n"
-            "`/coinflip heads|tails <amount>` and `/gamble <amount> <2-30>` — Play coin games.\n"
             "`/coinlb` — View the BRAX Coin leaderboard. `/coinadd @user <amount>` — Add coins (Braxton only).\n"
             "`/stocks`, `/stockbuy`, `/stocksell` — View and trade simulated shares.\n"
             "`/mine` — Dig for Mick & Rorty materials and collectibles (2.5-second cooldown). `/inventory` — View your finds.\n"
@@ -4474,7 +4473,7 @@ if not TOKEN:
         "BOT_TOKEN is missing. Add BOT_TOKEN to your hosting panel's environment variables."
     )
 
-print("KAYDN BUILD: slash-only-staff-tiers | anti-everyone-escalation | gambling-commands-removed | sapphire-style-warn-purge | channel-locks")
+print("KAYDN BUILD: slash-only-staff-tiers | anti-everyone-escalation | no-gambling | sapphire-style-warn-purge | channel-locks")
 
 async def run_brax_with_login_backoff():
     # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
