@@ -34,6 +34,7 @@ STAFF_ROLE_LEVELS = {
     ADMIN_ROLE_ID: 4,
     HEAD_STAFF_ROLE_ID: 5,
 }
+STAFF_ROLE_IDS = set(STAFF_ROLE_LEVELS)
 STAFF_ROLE_KEYWORDS = (
     "staff", "moderator", "mod", "admin", "administrator",
     "helper", "management", "owner",
@@ -3044,8 +3045,8 @@ async def usage_add_command(ctx, member: discord.Member):
     if not has_staff_level(ctx.author, 5):
         await ctx.reply("Only Head Staff can grant the legacy BRAX Usage role.", mention_author=False)
         return
-    if not ctx.author.guild_permissions.manage_roles:
-        await ctx.reply("You need the **Manage Roles** permission to grant brax usage.", mention_author=False)
+    if not ctx.guild.me.guild_permissions.manage_roles:
+        await ctx.reply("Kaydn Bot needs the **Manage Roles** permission to grant the legacy BRAX Usage role.", mention_author=False)
         return
     role = ctx.guild.get_role(BRAX_USAGE_ROLE_ID)
     if role is None:
@@ -3115,8 +3116,8 @@ async def ticket_panel_command(ctx):
     if not has_staff_level(ctx.author, 3):
         await ctx.reply("This command requires Server Staff or higher.", mention_author=False)
         return
-    if not ctx.author.guild_permissions.manage_guild:
-        await ctx.reply("You also need the **Manage Server** permission.", mention_author=False)
+    if not ctx.guild.me.guild_permissions.send_messages:
+        await ctx.reply("Kaydn Bot needs permission to send messages in the ticket panel channel.", mention_author=False)
         return
     channel = ctx.guild.get_channel(TICKETS_CHANNEL_ID)
     if not isinstance(channel, discord.TextChannel):
