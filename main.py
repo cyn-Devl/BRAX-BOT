@@ -2856,19 +2856,7 @@ HELP_PAGES = [
         "description": (
             "`/mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n"
             "`/uwu @user` — Toggle advanced UWU lock with randomized stutters, word swaps and endings. "
-            "Messages are relayed through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n"
-            "`/balance [@user]` — Check coins. `/shop` / `/store` — View the store. "
-            "`/buy` — Purchase store items. `/pay <amount>` — Pay a BRAX Coin tax bill; `/pay tokens <amount>` — Pay a Token tax bill.\n"
-            "FBI tax bills have a random 1–3 minute deadline; missed bills trigger an 85–100% wallet seizure, and the bill remains due.\n"
-            "`/coinlb` — View the BRAX Coin leaderboard. `/coinadd @user <amount>` — Add coins (Braxton only).\n"
-            "`/stocks`, `/stockbuy`, `/stocksell` — View and trade simulated shares.\n"
-            "`/mine` — Dig for Mick & Rorty materials and collectibles (2.5-second cooldown). `/inventory` — View your finds.\n"
-            "`/jobs`, `/job join <name>`, `/job leave`, `/work` — Choose a job and earn wages every 10 minutes. Leaving starts a 5-minute rejoin cooldown.\n"
-            "`/crime` — Try a fictional crime for coins. Repeated attempts can get you caught by TBR and jailed for 1 minute.\n"
-            "`/company` — Create a company, invite members, and manage its bank.\n"
-            "`/cryptocreate`, `/cryptomarket`, `/cryptobuy`, `/cryptosell` — Create and trade virtual community coins (5 tokens to create).\n"
-            "`/sell <item> [amount]` — Sell selected finds; `/sell inv` / `/sell inventory` — Sell your entire sellable inventory for BRAX Coins. `/trade @member` — Open a private item/coin trade.\n"
-            "Inside a trade: `/offercoins`, `/offeritem`, `/tradeview`, `/tradeconfirm`, `/tradecancel`.\n\n"
+            "Messages are relayed through a clearly labelled Kaydn UWU webhook. Run it again to remove the lock.\n\n"
             "UWU lock is restricted to Admins+, the bot owner, Braxton, and ch33zee, and requires Kaydn Bot to have Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `/mlogs` history."
         ),
@@ -2880,7 +2868,7 @@ LESSER_FUN_HELP_PAGE = {
     "title": "<:Fun:1571324174394200085> Fun",
     "description": (
         "`/mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n\n"
-        "You can also use /mine to dig, /inventory to view finds, /sell <item> to sell, and /trade @member to open a private trade.\n\n"
+        "Use /mweute for a harmless fake mute.\n\n"
     ),
     "footer": "Kaydn Bot • Lesser B Usage",
 }
