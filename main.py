@@ -21,10 +21,18 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "1563997203377426623"))
 DEFAULT_MOD_LOG_CHANNEL_ID = 1571301904946831441
-STAFF_ROLE_IDS = {
-    int(value.strip())
-    for value in os.getenv("STAFF_ROLE_IDS", "").split(",")
-    if value.strip().isdigit()
+# Kaydn Bot staff roles and access levels.
+HEAD_STAFF_ROLE_ID = 1574224013255774420
+ADMIN_ROLE_ID = 1574454576927613048
+SERVER_STAFF_ROLE_ID = 1574232993113972806
+SENIOR_STAFF_ROLE_ID = 1574232953716744262
+TRIAL_STAFF_ROLE_ID = 1574225656235958292
+STAFF_ROLE_LEVELS = {
+    TRIAL_STAFF_ROLE_ID: 1,
+    SENIOR_STAFF_ROLE_ID: 2,
+    SERVER_STAFF_ROLE_ID: 3,
+    ADMIN_ROLE_ID: 4,
+    HEAD_STAFF_ROLE_ID: 5,
 }
 STAFF_ROLE_KEYWORDS = (
     "staff", "moderator", "mod", "admin", "administrator",
@@ -389,7 +397,26 @@ intents.guilds = True
 intents.members = True
 intents.messages = True
 intents.message_content = True
-bot = commands.Bot(command_prefix="b!", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix=(), intents=intents, help_command=None)
+
+@bot.tree.error
+async def kaydn_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    original_error = getattr(error, "original", error)
+    if isinstance(error, app_commands.CommandOnCooldown):
+        message = f"Please wait {error.retry_after:.1f} seconds before using that command again."
+    elif isinstance(error, app_commands.MissingPermissions):
+        message = "Kaydn Bot is missing a required Discord permission."
+    else:
+        print(f"KAYDN APP COMMAND ERROR: {type(original_error).__name__}: {original_error}")
+        message = "Kaydn Bot couldn't complete that command. Please contact an administrator."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -407,14 +434,14 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.BadArgument):
         await ctx.reply(
             "That argument is invalid. Amounts must be whole numbers (no decimals). "
-            "Check the command format with b!help.",
+            "Check the command format with /help.",
             mention_author=False,
         )
         return
     if isinstance(error, commands.MissingRequiredArgument):
         signature = ctx.command.signature if ctx.command else ""
         await ctx.reply(
-            f"Missing an argument. Usage: `b!{ctx.command.qualified_name} {signature}`",
+            f"Missing an argument. Usage: `/{ctx.command.qualified_name} {signature}`",
             mention_author=False,
         )
         return
@@ -443,9 +470,18 @@ def shorten(value, limit=1024):
     return value if len(value) <= limit else value[:limit - 3] + "..."
 
 
+def staff_level(member):
+    """Highest Kaydn staff tier held by this member; zero means non-staff."""
+    return max((STAFF_ROLE_LEVELS.get(role.id, 0) for role in getattr(member, "roles", [])), default=0)
+
+
+def has_staff_level(member, minimum):
+    return staff_level(member) >= minimum
+
+
 def is_high_staff(member):
-    """BRAX command access is granted only by the dedicated BRAX Usage role."""
-    return any(role.id == BRAX_USAGE_ROLE_ID for role in member.roles)
+    """Compatibility helper for checks that allow any Kaydn staff member."""
+    return staff_level(member) >= 1
 
 
 def can_manage_tickets(member):
@@ -493,14 +529,14 @@ def make_embed(title, description, color):
         color=color,
         timestamp=discord.utils.utcnow(),
     )
-    embed.set_footer(text="BRAX • Server Logging")
+    embed.set_footer(text="Kaydn Bot • Server Logging")
     return embed
 
 
 async def send_mod_log(guild, embed):
     channel_id = mod_log_channels.get(str(guild.id), DEFAULT_MOD_LOG_CHANNEL_ID)
     if not channel_id:
-        print(f"BRAX: No moderation log channel configured for {guild.name}. Use b!mlog in the desired channel.")
+        print(f"BRAX: No moderation log channel configured for {guild.name}. Use /mlog in the desired channel.")
         return False
     channel = guild.get_channel(int(channel_id))
     if channel is None:
@@ -521,7 +557,7 @@ async def send_mod_log(guild, embed):
 
 
 async def log_brax_action(guild, target, moderator, action, reason, duration=None):
-    """Save an action to the target's b!mlogs history and send it to mod logs."""
+    """Save an action to the target's /mlogs history and send it to mod logs."""
     record_moderation_action(target, action, moderator, reason, duration)
     embed = discord.Embed(
         title=f"{EMOJIS['confirmed']} {action}",
@@ -537,7 +573,7 @@ async def log_brax_action(guild, target, moderator, action, reason, duration=Non
     if duration:
         embed.add_field(name="Duration", value=str(duration), inline=True)
     embed.add_field(name="Reason", value=shorten(reason or "No reason provided"), inline=False)
-    embed.set_footer(text="BRAX • Moderation")
+    embed.set_footer(text="Kaydn Bot • Moderation")
     await send_mod_log(guild, embed)
 
 
@@ -718,7 +754,7 @@ async def send_agency_webhook(guild, channel, agency, content):
             return False
 
 
-@bot.command(name="pay")
+@bot.hybrid_command(name="pay")
 async def pay_tax_command(ctx, asset_or_amount: str, amount: int = None):
     key = economy_key(ctx.guild.id, ctx.author.id)
     bills = economy_data.setdefault("pending_tax_bills", {})
@@ -731,11 +767,11 @@ async def pay_tax_command(ctx, asset_or_amount: str, amount: int = None):
         try:
             payment = int(asset_or_amount)
         except ValueError:
-            await ctx.reply("Use b!pay <coin amount> or b!pay tokens <amount>.", mention_author=False)
+            await ctx.reply("Use /pay <coin amount> or /pay tokens <amount>.", mention_author=False)
             return
     else:
         if asset_or_amount.casefold() not in {"token", "tokens"}:
-            await ctx.reply("Use b!pay <coin amount> or b!pay tokens <amount>.", mention_author=False)
+            await ctx.reply("Use /pay <coin amount> or /pay tokens <amount>.", mention_author=False)
             return
         asset = "tokens"
         payment = amount
@@ -901,8 +937,8 @@ async def tbr_tax_loop():
                     guild, channel, "FBI",
                     f"FBI TAX BILL — PAYMENT REQUIRED\n<@{user_id}>, you owe "
                     + " and ".join(parts)
-                    + f". Pay within {int(deadline - now)} seconds using b!pay <coin amount> "
-                    f"or b!pay tokens <amount>. If unpaid, FBI seizes 85–100% of your wallet "
+                    + f". Pay within {int(deadline - now)} seconds using /pay <coin amount> "
+                    f"or /pay tokens <amount>. If unpaid, FBI seizes 85–100% of your wallet "
                     "Coins and Tokens. The original bill will still have to be paid.",
                 )
         await asyncio.sleep(1)
@@ -938,7 +974,7 @@ async def debt_collection_loop():
                 else:
                     notice = (
                         f"TFHSA returned for <@{user_id}>. Debt cleared, but the mining license is revoked. "
-                        "BRAX economy commands are now limited to b!jobs, b!job, b!work, b!balance, and b!help."
+                        "BRAX economy commands are now limited to /jobs, /job, /work, /balance, and /help."
                     )
                 await send_agency_webhook(guild, channel, "TFHSA", notice)
         await asyncio.sleep(5)
@@ -1019,7 +1055,7 @@ async def on_ready():
         bot.add_view(TicketControlsView())
         try:
             synced = await bot.tree.sync()
-            print(f"BRAX: Synced {len(synced)} slash commands.")
+            print(f"Kaydn Bot: Synced {len(synced)} slash commands.")
         except discord.HTTPException as error:
             print(f"BRAX: Slash-command sync failed: {error}")
         bot._brax_synced = True
@@ -1346,7 +1382,7 @@ async def on_message(message):
 
     # Jail enforcement: block all prefix commands until the one-minute sentence ends.
     member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
-    if member is not None and member.id != 997577147667460186 and message.content.startswith("b!"):
+    if member is not None and member.id != 997577147667460186 and message.content.startswith("/"):
         jail_key = economy_key(message.guild.id, member.id)
         jail_until = float(economy_data.setdefault("jail_until", {}).get(jail_key, 0))
         if jail_until > time.time():
@@ -1359,61 +1395,7 @@ async def on_message(message):
 
     # Blacklist enforcement: block image/GIF posts in General and all posts in Media.
 
-    if member is not None and economy_data.setdefault("gamble_only", {}).get(economy_key(message.guild.id, member.id)):
-        if message.content.startswith("b!"):
-            context = await bot.get_context(message)
-            command_name = context.command.name if context.command else None
-            if command_name not in {"jobs", "job", "work", "balance", "bal", "coins", "help"}:
-                await message.reply(
-                    "TFHSA revoked your mining license. You can currently use b!jobs, b!job, b!work, b!balance, and b!help.",
-                    mention_author=False,
-                )
-                return
-
-    if has_lesser_usage(member) and message.content.startswith("b!"):
-        context = await bot.get_context(message)
-        command_name = context.command.name if context.command else None
-        allowed_lesser_commands = {
-            "mweute", "help", "gamble", "mine", "inventory", "sell", "trade",
-            "offercoins", "offeritem", "tradeconfirm", "tradecancel", "tradeview",
-            "shop", "store", "convert", "tokens", "braxtokens", "specialbuy",
-            "stealtokens", "jobs", "job", "work", "company", "cryptocreate",
-            "cryptomarket", "cryptobuy", "cryptosell",
-        }
-        allowed_lesser_commands.update({"coinflip", "flip"})
-        if command_name is not None and command_name not in allowed_lesser_commands:
-            strikes = lesser_usage_state.setdefault("strikes", {})
-            count = int(strikes.get(str(member.id), 0)) + 1
-            strikes[str(member.id)] = count
-            if count == 1:
-                save_lesser_usage_state()
-                await message.channel.send(
-                    f"⚠️ {message.author.mention} You risk your inferior usage being removed. Do you wanna continue your peasant act?",
-                    allowed_mentions=discord.AllowedMentions(users=True),
-                )
-            else:
-                lesser_role = message.guild.get_role(LESSER_BRAX_USAGE_ROLE_ID)
-                if lesser_role is not None and lesser_role in member.roles:
-                    try:
-                        await member.remove_roles(lesser_role, reason="BRAX: second unauthorized command attempt with Lesser B Usage")
-                        blocked = lesser_usage_state.setdefault("blocked_users", [])
-                        if member.id not in blocked:
-                            blocked.append(member.id)
-                        save_lesser_usage_state()
-                        await message.channel.send(
-                            f"🚫 {message.author.mention} has lost Lesser B Usage permanently. Any attempt to give it back will be reversed.",
-                            allowed_mentions=discord.AllowedMentions(users=True),
-                        )
-                        await log_brax_action(message.guild, member, bot.user, "Lesser B Usage Revoked", "Second unauthorized BRAX command attempt; role reassignment is blocked")
-                    except discord.HTTPException as error:
-                        print(f"BRAX: Could not revoke Lesser B Usage from {member}: {error}")
-                        await message.channel.send(f"{EMOJIS['denied']} I couldn't remove the Lesser B role. Check my Manage Roles permission and role hierarchy.")
-                else:
-                    blocked = lesser_usage_state.setdefault("blocked_users", [])
-                    if member.id not in blocked:
-                        blocked.append(member.id)
-                    save_lesser_usage_state()
-            return
+    # Legacy text-prefix restrictions were retired; Kaydn Bot now uses slash commands only.
 
     if message.channel.id == MEDIA_CHANNEL_ID and member and has_blacklist(member, "Image blacklist"):
         try:
@@ -1955,7 +1937,7 @@ class BlacklistSelect(discord.ui.Select):
             return
         key = blacklist_assignment_key(guild.id, self.target.id, role_id)
         blacklist_assignments[key] = interaction.user.id
-        if not is_divine and not is_high_staff(interaction.user):
+        if not is_divine and not has_staff_level(interaction.user, 4):
             uses_key = special_purchase_key(guild.id, interaction.user.id, "blacklist_uses")
             economy_data["special_purchases"][uses_key] = max(0, int(economy_data["special_purchases"].get(uses_key, 0)) - 1)
             economy_data.setdefault("temporary_blacklists", {})[f"{guild.id}:{self.target.id}:{role_id}"] = {
@@ -1991,10 +1973,10 @@ class BlacklistView(discord.ui.View):
         self.add_item(BlacklistSelect(target))
 
 
-@bot.command(name="blacklist")
+@bot.hybrid_command(name="blacklist")
 async def blacklist_command(ctx, user: discord.Member):
     has_unlock = int(economy_data.setdefault("special_purchases", {}).get(special_purchase_key(ctx.guild.id, ctx.author.id, "blacklist_uses"), 0)) > 0
-    if not is_high_staff(ctx.author) and ctx.author.id not in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS and not has_unlock:
+    if not has_staff_level(ctx.author, 4) and ctx.author.id not in DIVINE_PUNISHMENT_REMOVAL_ALLOWED_IDS and not has_unlock:
         await ctx.reply("You need BRAX Usage, Divine authorization, or an unused blacklist unlock from the Special Shop.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_roles:
@@ -2270,7 +2252,7 @@ async def close_ticket_channel(interaction, reason=None, already_deferred=False)
             embed.add_field(name="Claimed By", value=claimed_value, inline=True)
             embed.add_field(name="Closed By", value=f"{interaction.user.mention}\\n{interaction.user} (ID: {interaction.user.id})", inline=True)
             embed.add_field(name="Closing Reason", value=shorten(reason.strip(), 1024), inline=False)
-            embed.set_footer(text="BRAX • Ticket Archive")
+            embed.set_footer(text="Kaydn Bot • Ticket Archive")
 
             await log_channel.send(
                 embed=embed,
@@ -2412,22 +2394,27 @@ def parse_timeout_duration(value):
 
 
 async def moderation_gate(ctx, permission_name):
-    if not is_high_staff(ctx.author):
-        await ctx.reply(
-            f"{EMOJIS['denied']} You need the BRAX Usage role to use BRAX moderation commands.",
-            mention_author=False,
-        )
+    minimum_level = {
+        "moderate_members": 1,  # Trial Staff+
+        "manage_channels": 1,   # Trial Staff+
+        "manage_messages": 1,   # Trial Staff+
+        "kick_members": 2,      # Senior Staff+
+        "ban_members": 3,       # Server Staff+
+        "manage_roles": 4,      # Admins+
+        "manage_guild": 4,      # Admins+
+    }.get(permission_name, 4)
+    if not has_staff_level(ctx.author, minimum_level):
+        names = {1: "Trial Staff", 2: "Senior Staff", 3: "Server Staff", 4: "Admins"}
+        await ctx.reply(f"{EMOJIS['denied']} This command requires **{names[minimum_level]}** or higher.", mention_author=False)
         return False
-    if not getattr(ctx.author.guild_permissions, permission_name, False):
-        await ctx.reply(
-            f"{EMOJIS['denied']} You need the **{permission_name.replace('_', ' ').title()}** permission.",
-            mention_author=False,
-        )
+    bot_member = ctx.guild.me
+    if bot_member is None or not getattr(bot_member.guild_permissions, permission_name, False):
+        await ctx.reply(f"{EMOJIS['denied']} Kaydn Bot needs the **{permission_name.replace('_', ' ').title()}** permission.", mention_author=False)
         return False
     return True
 
 
-@bot.command(name="warn")
+@bot.hybrid_command(name="warn")
 async def warn_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await moderation_gate(ctx, "moderate_members"):
         return
@@ -2458,7 +2445,7 @@ async def warn_command(ctx, member: discord.Member, *, reason: str = "No reason 
     await log_brax_action(ctx.guild, member, ctx.author, "Warned", reason, "Permanent")
 
 
-@bot.command(name="unwarn")
+@bot.hybrid_command(name="unwarn")
 async def unwarn_command(ctx, member: discord.Member, case_id: int = None):
     if not await moderation_gate(ctx, "moderate_members"):
         return
@@ -2489,7 +2476,7 @@ async def unwarn_command(ctx, member: discord.Member, case_id: int = None):
     await log_brax_action(ctx.guild, member, ctx.author, "Unwarned", f"Removed warning case #{selected['case_id']}")
 
 
-@bot.command(name="lock")
+@bot.hybrid_command(name="lock")
 async def lock_command(ctx, channel: discord.TextChannel = None, *, reason: str = "Channel locked by moderator"):
     if not await moderation_gate(ctx, "manage_channels"):
         return
@@ -2512,7 +2499,7 @@ async def lock_command(ctx, channel: discord.TextChannel = None, *, reason: str 
     await log_brax_action(ctx.guild, ctx.author, ctx.author, "Channel Locked", f"{channel.name}: {reason}")
 
 
-@bot.command(name="unlock")
+@bot.hybrid_command(name="unlock")
 async def unlock_command(ctx, channel: discord.TextChannel = None, *, reason: str = "Channel unlocked by moderator"):
     if not await moderation_gate(ctx, "manage_channels"):
         return
@@ -2539,22 +2526,24 @@ async def unlock_command(ctx, channel: discord.TextChannel = None, *, reason: st
     await log_brax_action(ctx.guild, ctx.author, ctx.author, "Channel Unlocked", f"{channel.name}: {reason}")
 
 
-@bot.command(name="purge", aliases=["clear"])
+@bot.hybrid_command(name="purge", aliases=["clear"])
 async def purge_command(ctx, amount: int):
     if not await moderation_gate(ctx, "manage_messages"):
         return
-    if not 1 <= amount <= 100:
-        await ctx.reply(f"{EMOJIS['denied']} Choose a number from 1 to 100.", mention_author=False)
+    tier = staff_level(ctx.author)
+    tier_limit = 20 if tier == 1 else 50 if tier == 2 else 100
+    if not 1 <= amount <= tier_limit:
+        await ctx.reply(f"{EMOJIS['denied']} Your staff tier can purge between 1 and {tier_limit} messages at a time.", mention_author=False)
         return
     try:
-        deleted = await ctx.channel.purge(limit=amount + 1, reason=f"Bulk purge by {ctx.author}")
+        deleted = await ctx.channel.purge(limit=amount, reason=f"Bulk purge by {ctx.author}")
     except discord.Forbidden:
         await ctx.reply(f"{EMOJIS['denied']} I need Manage Messages and Read Message History.", mention_author=False)
         return
     except discord.HTTPException as error:
         await ctx.reply(f"{EMOJIS['denied']} Purge failed: {error}", mention_author=False)
         return
-    count = max(0, len(deleted) - 1)
+    count = len(deleted)
     embed = discord.Embed(
         title=f"{EMOJIS['confirmed']} Deleted {count} messages",
         color=discord.Color.green(),
@@ -2593,7 +2582,7 @@ def moderation_history_embed(member, page):
         embed.add_field(name=f"Log {index}", value="\n".join(details), inline=False)
     if not entries:
         embed.description = "No moderation actions have been recorded for this member yet."
-    embed.set_footer(text=f"BRAX • Page {page + 1}/{total_pages} • 3 logs per page")
+    embed.set_footer(text=f"Kaydn Bot • Page {page + 1}/{total_pages} • 3 logs per page")
     return embed
 
 class ModerationHistoryView(discord.ui.View):
@@ -2657,7 +2646,7 @@ def moderator_action_history_embed(moderator_id, entries, page):
         embed.add_field(name=f"Action {index}", value="\n".join(details), inline=False)
     if not entries:
         embed.description = "You haven't performed any logged BRAX actions yet."
-    embed.set_footer(text=f"BRAX • Your Actions • Page {page + 1}/{total_pages}")
+    embed.set_footer(text=f"Kaydn Bot • Your Actions • Page {page + 1}/{total_pages}")
     return embed
 
 class ModeratorActionHistoryView(discord.ui.View):
@@ -2709,10 +2698,10 @@ class ModeratorActionHistoryView(discord.ui.View):
         await self.update_page(interaction)
 
 
-@bot.command(name="mlogs")
+@bot.hybrid_command(name="mlogs")
 async def moderation_logs_command(ctx, member: discord.Member = None):
-    if not is_high_staff(ctx.author):
-        await ctx.reply("You need the brax usage role to view moderation logs.", mention_author=False)
+    if not has_staff_level(ctx.author, 2):
+        await ctx.reply("This command requires Senior Staff or higher.", mention_author=False)
         return
     if member is None:
         entries = moderator_action_entries(ctx.author.id)
@@ -2726,7 +2715,7 @@ async def moderation_logs_command(ctx, member: discord.Member = None):
     view = ModerationHistoryView(member, ctx.author.id)
     await ctx.reply(embed=moderation_history_embed(member, 0), view=view, mention_author=False)
 
-@bot.command(name="mweute")
+@bot.hybrid_command(name="mweute")
 async def fake_mute_command(ctx, member: discord.Member):
     if not (is_high_staff(ctx.author) or has_lesser_usage(ctx.author)):
         await ctx.reply(f"{EMOJIS['denied']} You need a BRAX Usage role to use Fun commands.", mention_author=False)
@@ -2744,7 +2733,7 @@ async def fake_mute_command(ctx, member: discord.Member):
     )
 
 
-@bot.command(name="uwu")
+@bot.hybrid_command(name="uwu")
 async def uwu_command(ctx, member: discord.Member):
     if not is_uwu_authorized(ctx.author):
         await ctx.reply(f"{EMOJIS['denied']} Only authorized users can use UWU lock.", mention_author=False)
@@ -2772,7 +2761,7 @@ async def uwu_command(ctx, member: discord.Member):
     await ctx.reply(message, mention_author=False)
     await log_brax_action(
         ctx.guild, member, ctx.author, action,
-        "Toggled through b!uwu; message relay uses a labelled BRAX UWU webhook",
+        "Toggled through /uwu; message relay uses a labelled BRAX UWU webhook",
     )
 
 
@@ -2838,11 +2827,11 @@ class UwuListView(discord.ui.View):
             allowed_mentions=discord.AllowedMentions.none(),
         )
         if member is not None:
-            await log_brax_action(self.guild, member, interaction.user, "UWU Lock Removed", "Removed through b!uwulist")
+            await log_brax_action(self.guild, member, interaction.user, "UWU Lock Removed", "Removed through /uwulist")
         self.stop()
 
 
-@bot.command(name="uwulist")
+@bot.hybrid_command(name="uwulist")
 async def uwu_list_command(ctx):
     if not is_uwu_authorized(ctx.author):
         await ctx.reply(f"{EMOJIS['denied']} Only authorized users can view or manage UWU locks.", mention_author=False)
@@ -2867,7 +2856,7 @@ async def uwu_list_command(ctx):
     await ctx.reply(embed=embed, view=view, mention_author=False)
 
 
-@bot.command(name="mlog")
+@bot.hybrid_command(name="mlog")
 async def moderation_log_command(ctx, channel: discord.TextChannel = None):
     if not await moderation_gate(ctx, "manage_guild"):
         return
@@ -2887,7 +2876,7 @@ async def moderation_log_command(ctx, channel: discord.TextChannel = None):
     )
 
 
-@bot.command(name="timeout", aliases=["mute", "tempmute"])
+@bot.hybrid_command(name="timeout", aliases=["mute", "tempmute"])
 async def timeout_command(ctx, member: discord.Member, duration: str, *, reason: str):
     if not await moderation_gate(ctx, "moderate_members"):
         return
@@ -2914,7 +2903,7 @@ async def timeout_command(ctx, member: discord.Member, duration: str, *, reason:
     await send_moderation_result(ctx, "Member Timed Out", member, reason, duration)
 
 
-@bot.command(name="untimeout", aliases=["unmute", "removetimeout"])
+@bot.hybrid_command(name="untimeout", aliases=["unmute", "removetimeout"])
 async def untimeout_command(ctx, member: discord.Member, *, reason: str = "Timeout removed"):
     if not await moderation_gate(ctx, "moderate_members"):
         return
@@ -2933,7 +2922,7 @@ async def untimeout_command(ctx, member: discord.Member, *, reason: str = "Timeo
     await send_moderation_result(ctx, "Timeout Removed", member, reason)
 
 
-@bot.command(name="kick")
+@bot.hybrid_command(name="kick")
 async def kick_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await moderation_gate(ctx, "kick_members"):
         return
@@ -2958,7 +2947,7 @@ async def kick_command(ctx, member: discord.Member, *, reason: str = "No reason 
     await send_moderation_result(ctx, "Member Kicked", member, reason)
 
 
-@bot.command(name="ban")
+@bot.hybrid_command(name="ban")
 async def ban_command(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await moderation_gate(ctx, "ban_members"):
         return
@@ -2983,7 +2972,7 @@ async def ban_command(ctx, member: discord.Member, *, reason: str = "No reason p
     await send_moderation_result(ctx, "Member Banned", member, reason)
 
 
-@bot.command(name="unban")
+@bot.hybrid_command(name="unban")
 async def unban_command(ctx, user_id: int, *, reason: str = "Ban removed"):
     if not await moderation_gate(ctx, "ban_members"):
         return
@@ -3003,7 +2992,7 @@ async def unban_command(ctx, user_id: int, *, reason: str = "Ban removed"):
     await send_moderation_result(ctx, "Member Unbanned", user, reason)
 
 
-@bot.command(name="roleadd", aliases=["addrole"])
+@bot.hybrid_command(name="roleadd", aliases=["addrole"])
 async def role_add_command(ctx, member: discord.Member, role: discord.Role, *, reason: str = "Role added by moderator"):
     if not await moderation_gate(ctx, "manage_roles"):
         return
@@ -3025,7 +3014,7 @@ async def role_add_command(ctx, member: discord.Member, role: discord.Role, *, r
     await send_moderation_result(ctx, "Role Added", member, reason)
     
 
-@bot.command(name="roleremove", aliases=["removerole"])
+@bot.hybrid_command(name="roleremove", aliases=["removerole"])
 async def role_remove_command(ctx, member: discord.Member, role: discord.Role, *, reason: str = "Role removed by moderator"):
     if not await moderation_gate(ctx, "manage_roles"):
         return
@@ -3050,10 +3039,10 @@ async def role_remove_command(ctx, member: discord.Member, role: discord.Role, *
     await send_moderation_result(ctx, "Role Removed", member, reason)
 
 
-@bot.command(name="usageadd")
+@bot.hybrid_command(name="usageadd")
 async def usage_add_command(ctx, member: discord.Member):
-    if ctx.author.id not in USAGE_ROLE_GRANTER_IDS:
-        await ctx.reply("Only Braxton and kaydnn can grant the brax usage role.", mention_author=False)
+    if not has_staff_level(ctx.author, 5):
+        await ctx.reply("Only Head Staff can grant the legacy BRAX Usage role.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_roles:
         await ctx.reply("You need the **Manage Roles** permission to grant brax usage.", mention_author=False)
@@ -3083,14 +3072,14 @@ async def usage_add_command(ctx, member: discord.Member):
     )
     await log_brax_action(
         ctx.guild, member, ctx.author, "BRAX Usage Granted",
-        "BRAX Usage access granted with b!usageadd",
+        "BRAX Usage access granted with /usageadd",
     )
 
 
-@bot.command(name="lusageadd")
+@bot.hybrid_command(name="lusageadd")
 async def lesser_usage_add_command(ctx, member: discord.Member):
-    if not is_high_staff(ctx.author):
-        await ctx.reply("You need the BRAX Usage role to give Lesser B Usage.", mention_author=False)
+    if not has_staff_level(ctx.author, 3):
+        await ctx.reply("This command requires Server Staff or higher.", mention_author=False)
         return
     role = ctx.guild.get_role(LESSER_BRAX_USAGE_ROLE_ID)
     if role is None:
@@ -3103,7 +3092,7 @@ async def lesser_usage_add_command(ctx, member: discord.Member):
         await ctx.reply(f"{member.mention} already has the Lesser B Usage role.", mention_author=False)
         return
     try:
-        await member.add_roles(role, reason=f"Lesser B Usage granted by {ctx.author} with b!lusageadd")
+        await member.add_roles(role, reason=f"Lesser B Usage granted by {ctx.author} with /lusageadd")
     except discord.Forbidden:
         await ctx.reply("I can't grant Lesser B Usage. Check my Manage Roles permission and role hierarchy.", mention_author=False)
         return
@@ -3117,14 +3106,14 @@ async def lesser_usage_add_command(ctx, member: discord.Member):
     )
     await log_brax_action(
         ctx.guild, member, ctx.author, "Lesser B Usage Granted",
-        "Lesser B Usage access granted with b!lusageadd",
+        "Lesser B Usage access granted with /lusageadd",
     )
 
 
-@bot.command(name="ticketpanel")
+@bot.hybrid_command(name="ticketpanel")
 async def ticket_panel_command(ctx):
-    if not is_high_staff(ctx.author):
-        await ctx.reply("You need the BRAX Usage role to use BRAX commands.", mention_author=False)
+    if not has_staff_level(ctx.author, 3):
+        await ctx.reply("This command requires Server Staff or higher.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_guild:
         await ctx.reply("You also need the **Manage Server** permission.", mention_author=False)
@@ -3154,7 +3143,7 @@ SHOP_ITEMS = {
     "divine": (450, "Divine punishment removal (staff review)"),
 }
 
-@bot.command(name="balance", aliases=["bal", "coins"])
+@bot.hybrid_command(name="balance", aliases=["bal", "coins"])
 async def balance_command(ctx, member: discord.Member = None):
     member = member or ctx.author
     key = economy_key(ctx.guild.id, member.id)
@@ -3189,21 +3178,21 @@ class BraxShopView(discord.ui.View):
             title = f"{BRAX_COINS_EMOJI} BRAX Store • Regular Shop"
             description = (
                 "Earn 1 BRAX Coin every 10 messages.\n\n"
-                "50 Coins — Lesser BRAX Usage: b!buy lesser\n"
-                "24,000,000 Coins — BRAX Usage (staff review): b!buy usage\n"
-                "40 Coins — Remove one regular blacklist: b!buy unblacklist\n"
-                "450 Coins — Divine punishment removal (staff review): b!buy divine\n\n"
+                "50 Coins — Lesser BRAX Usage: /buy lesser\n"
+                "24,000,000 Coins — BRAX Usage (staff review): /buy usage\n"
+                "40 Coins — Remove one regular blacklist: /buy unblacklist\n"
+                "450 Coins — Divine punishment removal (staff review): /buy divine\n\n"
                 "Use Forward for the Special Shop."
             )
         else:
             title = "✦ BRAX Special Shop"
             description = (
-                "50 BRAX Coins = 1 BRAX Token. Use b!convert; extra coins remain. Check with b!tokens.\n\n"
-                "5 Tokens — b!blacklist unlock: 3 uses; each regular blacklist lasts 3 hours.\n"
+                "50 BRAX Coins = 1 BRAX Token. Use /convert; extra coins remain. Check with /tokens.\n\n"
+                "5 Tokens — /blacklist unlock: 3 uses; each regular blacklist lasts 3 hours.\n"
                 "2 Tokens for 2× luck, 8 for 4×, 64 for 8×, 4,096 for 16×; prices keep increasing.\n"
                 "3 Tokens — 3 kick-protection charges.\n"
                 "20 Tokens — 1 ban-protection charge.\n"
-                "10 Tokens — Attempt to steal up to 10 tokens: b!stealtokens @member.\n"
+                "10 Tokens — Attempt to steal up to 10 tokens: /stealtokens @member.\n"
                 "100 Tokens — Permanent token-stealing immunity.\n\n"
                 "Protection applies to BRAX bot kick/ban commands, not actions by server owners or other bots."
             )
@@ -3225,13 +3214,13 @@ class BraxShopView(discord.ui.View):
         await self.update_page(interaction)
 
 
-@bot.command(name="shop", aliases=["store"])
+@bot.hybrid_command(name="shop", aliases=["store"])
 async def shop_command(ctx):
     view = BraxShopView(ctx.author.id)
     await ctx.reply(embed=view.make_embed(), view=view, mention_author=False)
 
 
-@bot.command(name="convert")
+@bot.hybrid_command(name="convert")
 async def convert_tokens_command(ctx):
     balance = coin_balance(ctx.guild.id, ctx.author.id)
     amount = balance // 50
@@ -3243,20 +3232,20 @@ async def convert_tokens_command(ctx):
     await ctx.reply(f"Converted {amount * 50} BRAX Coins into {amount} BRAX Token(s). Remaining coins: {coin_balance(ctx.guild.id, ctx.author.id)}. Token balance: {token_balance(ctx.guild.id, ctx.author.id)}.", mention_author=False)
 
 
-@bot.command(name="tokens", aliases=["braxtokens"])
+@bot.hybrid_command(name="tokens", aliases=["braxtokens"])
 async def tokens_command(ctx, member: discord.Member = None):
     member = member or ctx.author
     await ctx.reply(f"{member.display_name} has {token_balance(ctx.guild.id, member.id)} BRAX Token(s).", mention_author=False)
 
 
-@bot.command(name="specialbuy")
+@bot.hybrid_command(name="specialbuy")
 async def special_buy_command(ctx, item: str, *, details: str = ""):
     item = item.casefold().replace("-", "").replace("_", "")
     aliases = {"gambleluck": "luck", "kickshield": "kickprotection", "banshield": "banprotection", "tokenimmunity": "stealimmunity"}
     item = aliases.get(item, item)
     prices = {"blacklist": 5, "kickprotection": 3, "banprotection": 20, "stealimmunity": 100}
     if item not in prices and item != "luck":
-        await ctx.reply("Unknown special item. Check page 2 of b!shop.", mention_author=False)
+        await ctx.reply("Unknown special item. Check page 2 of /shop.", mention_author=False)
         return
     if item == "luck":
         current_luck = max(1, int(economy_data.setdefault("gamble_luck", {}).get(economy_key(ctx.guild.id, ctx.author.id), 1)))
@@ -3294,7 +3283,7 @@ async def special_buy_command(ctx, item: str, *, details: str = ""):
     await ctx.reply(f"Purchased for {price} BRAX Tokens. {message}", mention_author=False)
 
 
-@bot.command(name="stealtokens")
+@bot.hybrid_command(name="stealtokens")
 async def steal_tokens_command(ctx, member: discord.Member):
     if member.bot or member.id == ctx.author.id:
         await ctx.reply("Choose another member.", mention_author=False)
@@ -3315,13 +3304,13 @@ async def steal_tokens_command(ctx, member: discord.Member):
     add_tokens(ctx.guild.id, ctx.author.id, stolen)
     await ctx.reply(f"You stole {stolen} BRAX Tokens from {member.mention}.", mention_author=False)
 
-@bot.command(name="buy")
+@bot.hybrid_command(name="buy")
 async def buy_command(ctx, item: str, *, details: str = ""):
     item = item.casefold().replace("-", "").replace("_", "")
     aliases = {"lesserusage": "lesser", "braxusage": "usage", "blacklist": "unblacklist", "divinepunishment": "divine"}
     item = aliases.get(item, item)
     if item not in SHOP_ITEMS:
-        await ctx.reply("Unknown item. Use b!shop.", mention_author=False)
+        await ctx.reply("Unknown item. Use /shop.", mention_author=False)
         return
     price, label = SHOP_ITEMS[item]
     if coin_balance(ctx.guild.id, ctx.author.id) < price:
@@ -3393,7 +3382,7 @@ async def buy_command(ctx, item: str, *, details: str = ""):
     )
     await ctx.reply("Your request was sent to staff. Coins are held pending review.", mention_author=False)
 
-@bot.command(name="coinadd")
+@bot.hybrid_command(name="coinadd")
 async def coinadd_command(ctx, member: discord.Member, amount: int):
     # Only Braxton's Discord account may use this economy-admin command.
     if ctx.author.id != 1511412885040009309:
@@ -3411,11 +3400,11 @@ async def coinadd_command(ctx, member: discord.Member, amount: int):
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
     )
 
-@bot.command(name="coinflip", aliases=["flip"])
+@bot.hybrid_command(name="coinflip", aliases=["flip"])
 async def coinflip_command(ctx, side: str, amount: int):
     side = side.casefold()
     if side not in {"heads", "tails", "h", "t"} or not 1 <= amount <= MAX_GAMBLE_BET:
-        await ctx.reply(f"Use b!coinflip heads 10 or b!coinflip tails 10 (1–{MAX_GAMBLE_BET} coins). {COINFLIP_EMOJI}", mention_author=False)
+        await ctx.reply(f"Use /coinflip heads 10 or /coinflip tails 10 (1–{MAX_GAMBLE_BET} coins). {COINFLIP_EMOJI}", mention_author=False)
         return
     starting_balance = coin_balance(ctx.guild.id, ctx.author.id)
     if not spend_coins(ctx.guild.id, ctx.author.id, amount):
@@ -3433,10 +3422,10 @@ async def coinflip_command(ctx, side: str, amount: int):
     reduction_note = f" Your payout was reduced by {payout_reduction * 100:.0f}% due to your wallet tier." if payout_reduction else ""
     await ctx.reply(f"{COINFLIP_EMOJI} **{result.title()}!** " + (f"You won {payout:,} coins." if won else f"You lost {amount:,} coins.") + reduction_note + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
 
-@bot.command(name="gamble")
+@bot.hybrid_command(name="gamble")
 async def gamble_command(ctx, amount: int, multiplier: int = 2):
     if amount < 1 or multiplier < 2 or multiplier > MAX_GAMBLE_MULTIPLIER:
-        await ctx.reply(f"Use b!gamble <amount> <multiplier>. Multipliers range from 2x to {MAX_GAMBLE_MULTIPLIER}x. Example: b!gamble 100 15", mention_author=False)
+        await ctx.reply(f"Use /gamble <amount> <multiplier>. Multipliers range from 2x to {MAX_GAMBLE_MULTIPLIER}x. Example: /gamble 100 15", mention_author=False)
         return
     debt_key = economy_key(ctx.guild.id, ctx.author.id)
     fraud_until = economy_data.setdefault("gamble_fraud_until", {})
@@ -3529,7 +3518,7 @@ async def gamble_command(ctx, amount: int, multiplier: int = 2):
     )
     await ctx.reply(result_text[:1900], mention_author=False)
 
-@bot.command(name="coinlb", aliases=["coinleaderboard", "leaderboard", "richlist"])
+@bot.hybrid_command(name="coinlb", aliases=["coinleaderboard", "leaderboard", "richlist"])
 async def coin_leaderboard_command(ctx):
     prefix = f"{ctx.guild.id}:"
     entries = []
@@ -3570,7 +3559,7 @@ def move_stock_market():
         prices[symbol] = max(2, int(prices[symbol] * random.uniform(0.92, 1.09)))
     save_economy()
 
-@bot.command(name="stocks", aliases=["stock"])
+@bot.hybrid_command(name="stocks", aliases=["stock"])
 async def stocks_command(ctx):
     move_stock_market()
     prices = stock_prices()
@@ -3578,10 +3567,10 @@ async def stocks_command(ctx):
     holdings = economy_data.setdefault("stocks", {}).get(key, {})
     quotes = "\n".join(f"**{symbol}** — {price} {BRAX_COINS_EMOJI}" for symbol, price in prices.items())
     portfolio = ", ".join(f"{symbol} × {count}" for symbol, count in holdings.items() if count) or "No shares yet."
-    embed = discord.Embed(title="📈 BRAX Market", description=f"{quotes}\n\n**Your shares:** {portfolio}\nBuy: b!stockbuy BRAX 2\nSell: b!stocksell BRAX 1", color=discord.Color.from_rgb(58, 48, 35))
+    embed = discord.Embed(title="📈 BRAX Market", description=f"{quotes}\n\n**Your shares:** {portfolio}\nBuy: /stockbuy BRAX 2\nSell: /stocksell BRAX 1", color=discord.Color.from_rgb(58, 48, 35))
     await ctx.reply(embed=embed, mention_author=False)
 
-@bot.command(name="stockbuy")
+@bot.hybrid_command(name="stockbuy")
 async def stockbuy_command(ctx, symbol: str, shares: int):
     symbol = symbol.upper()
     prices = stock_prices()
@@ -3600,14 +3589,14 @@ async def stockbuy_command(ctx, symbol: str, shares: int):
     save_economy()
     await ctx.reply(f"Bought {shares} {symbol} shares for {cost} {BRAX_COINS_EMOJI}.", mention_author=False)
 
-@bot.command(name="stocksell")
+@bot.hybrid_command(name="stocksell")
 async def stocksell_command(ctx, symbol: str, shares: int):
     symbol = symbol.upper()
     prices = stock_prices()
     key = economy_key(ctx.guild.id, ctx.author.id)
     portfolio = economy_data.setdefault("stocks", {}).setdefault(key, {})
     if symbol not in prices or shares < 1 or int(portfolio.get(symbol, 0)) < shares:
-        await ctx.reply("You don't own that many shares. Check b!stocks.", mention_author=False)
+        await ctx.reply("You don't own that many shares. Check /stocks.", mention_author=False)
         return
     move_stock_market()
     price = stock_prices()[symbol]
@@ -3632,7 +3621,7 @@ JOB_DEFINITIONS = {
 }
 
 
-@bot.command(name="jobs")
+@bot.hybrid_command(name="jobs")
 async def jobs_command(ctx):
     current = economy_data.setdefault("jobs", {}).get(economy_key(ctx.guild.id, ctx.author.id))
     rows = []
@@ -3641,13 +3630,13 @@ async def jobs_command(ctx):
         rows.append(f"**{name.title()}**: {description} | {low}-{high} coins per shift{tag}")
     embed = discord.Embed(
         title="Available Jobs",
-        description="\n".join(rows) + "\nJoin with b!job join <name>; work every 10 minutes with b!work. Leaving a job starts a 5-minute wait before rejoining.",
+        description="\n".join(rows) + "\nJoin with /job join <name>; work every 10 minutes with /work. Leaving a job starts a 5-minute wait before rejoining.",
         color=discord.Color.from_rgb(58, 48, 35),
     )
     await ctx.reply(embed=embed, mention_author=False)
 
 
-@bot.command(name="job")
+@bot.hybrid_command(name="job")
 async def job_command(ctx, action: str, *, job_name: str = ""):
     key = economy_key(ctx.guild.id, ctx.author.id)
     if action.casefold() == "join":
@@ -3656,11 +3645,11 @@ async def job_command(ctx, action: str, *, job_name: str = ""):
             return
         name = job_name.casefold().strip()
         if name not in JOB_DEFINITIONS:
-            await ctx.reply("That job doesn't exist. Use b!jobs to see the list.", mention_author=False)
+            await ctx.reply("That job doesn't exist. Use /jobs to see the list.", mention_author=False)
             return
         jobs = economy_data.setdefault("jobs", {})
         if key in jobs:
-            await ctx.reply("Leave your current job first with b!job leave.", mention_author=False)
+            await ctx.reply("Leave your current job first with /job leave.", mention_author=False)
             return
         rejoin_ready = float(economy_data.setdefault("job_rejoin_cooldowns", {}).get(key, 0))
         if time.time() < rejoin_ready:
@@ -3669,7 +3658,7 @@ async def job_command(ctx, action: str, *, job_name: str = ""):
             return
         jobs[key] = name
         save_economy()
-        await ctx.reply(f"You're now employed as a {name.title()}. Use b!work every 10 minutes.", mention_author=False)
+        await ctx.reply(f"You're now employed as a {name.title()}. Use /work every 10 minutes.", mention_author=False)
     elif action.casefold() == "leave":
         old = economy_data.setdefault("jobs", {}).pop(key, None)
         if old:
@@ -3677,10 +3666,10 @@ async def job_command(ctx, action: str, *, job_name: str = ""):
             save_economy()
         await ctx.reply("You left your job. Wait 5 minutes before joining another one." if old else "You don't currently have a job.", mention_author=False)
     else:
-        await ctx.reply("Use b!job join <name> or b!job leave.", mention_author=False)
+        await ctx.reply("Use /job join <name> or /job leave.", mention_author=False)
 
 
-@bot.command(name="crime")
+@bot.hybrid_command(name="crime")
 async def crime_command(ctx):
     key = economy_key(ctx.guild.id, ctx.author.id)
     now = time.time()
@@ -3723,7 +3712,7 @@ async def crime_command(ctx):
     )
 
 
-@bot.command(name="work")
+@bot.hybrid_command(name="work")
 async def work_command(ctx):
     key = economy_key(ctx.guild.id, ctx.author.id)
     if economy_data.setdefault("job_banned", {}).get(key):
@@ -3731,7 +3720,7 @@ async def work_command(ctx):
         return
     job = economy_data.setdefault("jobs", {}).get(key)
     if job not in JOB_DEFINITIONS:
-        await ctx.reply("Get a job first with b!jobs and b!job join <name>.", mention_author=False)
+        await ctx.reply("Get a job first with /jobs and /job join <name>.", mention_author=False)
         return
     now = time.time()
     ready = float(economy_data.setdefault("work_cooldowns", {}).get(key, 0))
@@ -3762,7 +3751,7 @@ def company_for_member(guild_id, user_id):
     return economy_data.setdefault("companies", {}).get(cid) if cid else None
 
 
-@bot.command(name="bank")
+@bot.hybrid_command(name="bank")
 async def personal_bank_command(ctx, action: str, *, details: str = ""):
     action = action.casefold()
     bank = personal_bank_for(ctx.guild.id, ctx.author.id)
@@ -3773,7 +3762,7 @@ async def personal_bank_command(ctx, action: str, *, details: str = ""):
         return
     parts = details.split()
     if action not in {"deposit", "withdraw"} or len(parts) < 2:
-        await ctx.reply("Use b!bank balance, b!bank deposit <coins|tokens|politicalpower> <amount>, or b!bank withdraw <asset> <amount>. Items: b!bank deposit item <item name> <amount>.", mention_author=False)
+        await ctx.reply("Use /bank balance, /bank deposit <coins|tokens|politicalpower> <amount>, or /bank withdraw <asset> <amount>. Items: /bank deposit item <item name> <amount>.", mention_author=False)
         return
     asset = parse_bank_asset(parts[0])
     if asset is None:
@@ -3781,7 +3770,7 @@ async def personal_bank_command(ctx, action: str, *, details: str = ""):
         return
     if asset == "item":
         if len(parts) < 3:
-            await ctx.reply("Use b!bank deposit item <item name> <amount>.", mention_author=False)
+            await ctx.reply("Use /bank deposit item <item name> <amount>.", mention_author=False)
             return
         try: amount = int(parts[-1])
         except ValueError: amount = 0
@@ -3831,18 +3820,18 @@ async def personal_bank_command(ctx, action: str, *, details: str = ""):
     await ctx.reply(f"{action.title()}ed {amount:,} {asset.replace('_', ' ')} {direction} your personal bank. Banked assets are exempt from personal-wallet TBR taxes.", mention_author=False)
 
 
-@bot.command(name="politicalpower", aliases=["pp"])
+@bot.hybrid_command(name="politicalpower", aliases=["pp"])
 async def political_power_command(ctx):
     bank = personal_bank_for(ctx.guild.id, ctx.author.id)
     wallet = int(economy_data.setdefault("political_power", {}).get(economy_key(ctx.guild.id, ctx.author.id), 0))
     await ctx.reply(
         f"Political Power wallet: **{wallet:,}** | Personal bank: **{int(bank.get('political_power', 0)):,}**\n"
-        "Earn more with **b!ppdaily** (every 24 hours) or **b!work** (bonus PP each shift).",
+        "Earn more with **/ppdaily** (every 24 hours) or **/work** (bonus PP each shift).",
         mention_author=False,
     )
 
 
-@bot.command(name="ppdaily", aliases=["politicaldaily"])
+@bot.hybrid_command(name="ppdaily", aliases=["politicaldaily"])
 async def political_power_daily_command(ctx):
     key = economy_key(ctx.guild.id, ctx.author.id)
     cooldowns = economy_data.setdefault("pp_daily_cooldowns", {})
@@ -3862,7 +3851,7 @@ async def political_power_daily_command(ctx):
     await ctx.reply(f"🏛️ Daily claim: you earned **{reward} Political Power**. New wallet: **{wallet[key]:,} PP**. Come back in 24 hours.", mention_author=False)
 
 
-@bot.command(name="company")
+@bot.hybrid_command(name="company")
 async def company_command(ctx, action: str, *, details: str = ""):
     action = action.casefold()
     user_key = economy_key(ctx.guild.id, ctx.author.id)
@@ -3883,7 +3872,7 @@ async def company_command(ctx, action: str, *, details: str = ""):
         companies[cid] = {"guild_id": ctx.guild.id, "owner_id": ctx.author.id, "name": name, "bank": 0, "token_bank": 0, "political_power_bank": 0, "political_power_tax_at": time.time() + 3600, "members": [ctx.author.id]}
         memberships[user_key] = cid
         save_economy()
-        await ctx.reply(f"Company {name} has been founded! Invite members with b!company invite @member.", mention_author=False)
+        await ctx.reply(f"Company {name} has been founded! Invite members with /company invite @member.", mention_author=False)
 
     elif action == "invite":
         if company is None or int(company.get("owner_id", 0)) != ctx.author.id:
@@ -3892,14 +3881,14 @@ async def company_command(ctx, action: str, *, details: str = ""):
         try:
             invited = await commands.MemberConverter().convert(ctx, details)
         except commands.BadArgument:
-            await ctx.reply("Mention a member: b!company invite @member.", mention_author=False)
+            await ctx.reply("Mention a member: /company invite @member.", mention_author=False)
             return
         if invited.bot or economy_key(ctx.guild.id, invited.id) in memberships:
             await ctx.reply("That member can't join this company.", mention_author=False)
             return
         invites[economy_key(ctx.guild.id, invited.id)] = company_key(ctx.guild.id, ctx.author.id)
         save_economy()
-        await ctx.reply(f"Invitation sent to {invited.mention}. They can use b!company join.", mention_author=False)
+        await ctx.reply(f"Invitation sent to {invited.mention}. They can use /company join.", mention_author=False)
 
     elif action == "join":
         cid = invites.get(user_key)
@@ -3934,7 +3923,7 @@ async def company_command(ctx, action: str, *, details: str = ""):
         try: amount = int(parts[1]) if len(parts) == 2 else 0
         except ValueError: amount = 0
         if company is None or asset not in {"coins", "tokens", "political_power"} or amount < 1:
-            await ctx.reply("Use b!company deposit <coins|tokens|politicalpower> <amount>.", mention_author=False)
+            await ctx.reply("Use /company deposit <coins|tokens|politicalpower> <amount>.", mention_author=False)
             return
         field = {"coins": "bank", "tokens": "token_bank", "political_power": "political_power_bank"}[asset]
         wallets = {"coins": economy_data.setdefault("balances", {}), "tokens": economy_data.setdefault("tokens", {}), "political_power": economy_data.setdefault("political_power", {})}
@@ -3976,14 +3965,14 @@ async def company_command(ctx, action: str, *, details: str = ""):
         )
         await ctx.reply(embed=embed, mention_author=False)
     else:
-        await ctx.reply("Use b!company create <name>, invite @member, join, leave, info, deposit <asset> <amount>, or withdraw <asset> <amount>.", mention_author=False)
+        await ctx.reply("Use /company create <name>, invite @member, join, leave, info, deposit <asset> <amount>, or withdraw <asset> <amount>.", mention_author=False)
 
 
-@bot.command(name="cryptocreate")
+@bot.hybrid_command(name="cryptocreate")
 async def crypto_create_command(ctx, symbol: str, *, name: str):
     symbol = symbol.upper()
     if not re.fullmatch(r"[A-Z]{3,6}", symbol) or not name.strip() or len(name) > 32:
-        await ctx.reply("Use b!cryptocreate SYMBOL Coin Name. Symbols must be 3-6 letters.", mention_author=False)
+        await ctx.reply("Use /cryptocreate SYMBOL Coin Name. Symbols must be 3-6 letters.", mention_author=False)
         return
     market = economy_data.setdefault("custom_coins", {})
     key = f"{ctx.guild.id}:{symbol}"
@@ -3991,24 +3980,24 @@ async def crypto_create_command(ctx, symbol: str, *, name: str):
         await ctx.reply("That symbol is already taken in this server.", mention_author=False)
         return
     if not spend_tokens(ctx.guild.id, ctx.author.id, 5):
-        await ctx.reply("Creating a community coin costs 5 Brax Tokens. Convert coins with b!convert.", mention_author=False)
+        await ctx.reply("Creating a community coin costs 5 Brax Tokens. Convert coins with /convert.", mention_author=False)
         return
     market[key] = {"guild_id": ctx.guild.id, "creator_id": ctx.author.id, "name": name.strip(), "symbol": symbol, "price": 10}
     save_economy()
-    await ctx.reply(f"{name.strip()} ({symbol}) is now listed at 10 BRAX Coins per unit. Members can buy it with b!cryptobuy {symbol} <amount>.", mention_author=False)
+    await ctx.reply(f"{name.strip()} ({symbol}) is now listed at 10 BRAX Coins per unit. Members can buy it with /cryptobuy {symbol} <amount>.", mention_author=False)
 
 
-@bot.command(name="cryptomarket")
+@bot.hybrid_command(name="cryptomarket")
 async def crypto_market_command(ctx):
     coins = [coin for key, coin in economy_data.setdefault("custom_coins", {}).items() if key.startswith(f"{ctx.guild.id}:")]
     if not coins:
-        await ctx.reply("No community coins yet. Create one for 5 tokens with b!cryptocreate SYMBOL Coin Name.", mention_author=False)
+        await ctx.reply("No community coins yet. Create one for 5 tokens with /cryptocreate SYMBOL Coin Name.", mention_author=False)
         return
     lines = [f"**{coin['name']} ({coin['symbol']})** — {int(coin['price']):,} BRAX Coins per unit | Creator: <@{coin['creator_id']}>" for coin in coins]
     await ctx.reply(embed=discord.Embed(title="Community Coin Market", description="\n".join(lines), color=discord.Color.from_rgb(58, 48, 35)), mention_author=False)
 
 
-@bot.command(name="cryptobuy")
+@bot.hybrid_command(name="cryptobuy")
 async def crypto_buy_command(ctx, symbol: str, amount: int):
     symbol = symbol.upper()
     coin = economy_data.setdefault("custom_coins", {}).get(f"{ctx.guild.id}:{symbol}")
@@ -4027,7 +4016,7 @@ async def crypto_buy_command(ctx, symbol: str, amount: int):
     await ctx.reply(f"Bought {amount:,} {symbol} for {cost:,} BRAX Coins.", mention_author=False)
 
 
-@bot.command(name="cryptosell")
+@bot.hybrid_command(name="cryptosell")
 async def crypto_sell_command(ctx, symbol: str, amount: int):
     symbol = symbol.upper()
     coin = economy_data.setdefault("custom_coins", {}).get(f"{ctx.guild.id}:{symbol}")
@@ -4047,7 +4036,7 @@ async def crypto_sell_command(ctx, symbol: str, amount: int):
     await ctx.reply(f"Sold {amount:,} {symbol} for {proceeds:,} BRAX Coins.", mention_author=False)
 
 
-@bot.command(name="mine")
+@bot.hybrid_command(name="mine")
 async def mine_command(ctx):
     key = economy_key(ctx.guild.id, ctx.author.id)
     if economy_data.setdefault("gamble_only", {}).get(key):
@@ -4063,22 +4052,22 @@ async def mine_command(ctx):
         name,_,_=random.choices(MINING_LOOT,weights=[entry[2] for entry in MINING_LOOT],k=1)[0]
         found.append(name); add_item(ctx.guild.id,ctx.author.id,name,1)
     save_economy()
-    await ctx.reply("⛏️ **You finished digging!**\n"+"\n".join(f"• **{name}**" for name in found)+"\n\nCheck finds with b!inventory. Sell with b!sell <item>.",mention_author=False)
+    await ctx.reply("⛏️ **You finished digging!**\n"+"\n".join(f"• **{name}**" for name in found)+"\n\nCheck finds with /inventory. Sell with /sell <item>.",mention_author=False)
 
-@bot.command(name="inventory",aliases=["inv","backpack","bag"])
+@bot.hybrid_command(name="inventory",aliases=["inv","backpack","bag"])
 async def inventory_command(ctx,member:discord.Member=None):
     member=member or ctx.author; inventory=get_inventory(ctx.guild.id,member.id)
     entries=sorted([(name,int(amount)) for name,amount in inventory.items() if int(amount)>0],key=lambda entry:entry[0].casefold())
-    description="\n".join(f"**{name}** × {amount}" for name,amount in entries) if entries else "No items yet. Use b!mine to start digging."
+    description="\n".join(f"**{name}** × {amount}" for name,amount in entries) if entries else "No items yet. Use /mine to start digging."
     embed=discord.Embed(title=f"🎒 {member.display_name}'s Inventory",description=shorten(description,4000),color=discord.Color.from_rgb(58,48,35))
-    embed.set_footer(text=f"{len(entries)} different item types • Sell with b!sell <item>")
+    embed.set_footer(text=f"{len(entries)} different item types • Sell with /sell <item>")
     await ctx.reply(embed=embed,mention_author=False)
 
-@bot.command(name="sell")
+@bot.hybrid_command(name="sell")
 async def sell_command(ctx, *, item_and_amount: str):
     item_text = " ".join(item_and_amount.split())
 
-    # Bulk sale: b!sell inv or b!sell inventory
+    # Bulk sale: /sell inv or /sell inventory
     if item_text.casefold() in {"inv", "inventory"}:
         inventory = get_inventory(ctx.guild.id, ctx.author.id)
         sale_items = []
@@ -4111,7 +4100,7 @@ async def sell_command(ctx, *, item_and_amount: str):
         )
         return
 
-    # Single-item sale: b!sell <item> [amount]
+    # Single-item sale: /sell <item> [amount]
     parts = item_text.rsplit(" ", 1)
     amount = None
     if len(parts) == 2 and parts[1].isdigit():
@@ -4120,8 +4109,8 @@ async def sell_command(ctx, *, item_and_amount: str):
     item = normalize_mining_item(item_text)
     if item is None:
         await ctx.reply(
-            "I don't recognize that item. Use b!inventory to check your items, "
-            "or b!sell inv to sell your sellable inventory.",
+            "I don't recognize that item. Use /inventory to check your items, "
+            "or /sell inv to sell your sellable inventory.",
             mention_author=False,
         )
         return
@@ -4150,7 +4139,7 @@ async def sell_command(ctx, *, item_and_amount: str):
 
 trade_completion_lock = asyncio.Lock()
 
-@bot.command(name="trade")
+@bot.hybrid_command(name="trade")
 async def trade_command(ctx, member: discord.Member):
     if member.bot or member.id == ctx.author.id:
         await ctx.reply("Choose another human member to trade with.", mention_author=False)
@@ -4201,14 +4190,14 @@ async def trade_command(ctx, member: discord.Member):
     save_economy()
     await channel.send(
         f"{ctx.author.mention} {member.mention} — private trade opened.\n"
-        "Use b!offercoins <amount>, b!offeritem <amount> <item>, b!tradeview, "
-        "b!tradeconfirm, or b!tradecancel. Changing an offer resets both confirmations.",
+        "Use /offercoins <amount>, /offeritem <amount> <item>, /tradeview, "
+        "/tradeconfirm, or /tradecancel. Changing an offer resets both confirmations.",
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
     )
     await ctx.reply(f"Created your private trade channel: {channel.mention}", mention_author=False)
 
 
-@bot.command(name="offercoins")
+@bot.hybrid_command(name="offercoins")
 async def trade_offer_coins_command(ctx, amount: int):
     trade = active_trade_for_channel(ctx.channel.id)
     if trade is None or ctx.author.id not in trade_member_ids(trade) or trade.get("status", "open") != "open":
@@ -4230,7 +4219,7 @@ async def trade_offer_coins_command(ctx, amount: int):
     await ctx.reply(f"Coin offer updated to {amount:,}. Both confirmations were reset.", mention_author=False)
 
 
-@bot.command(name="offeritem")
+@bot.hybrid_command(name="offeritem")
 async def trade_offer_item_command(ctx, amount: int, *, item_name: str):
     trade = active_trade_for_channel(ctx.channel.id)
     if trade is None or ctx.author.id not in trade_member_ids(trade) or trade.get("status", "open") != "open":
@@ -4238,7 +4227,7 @@ async def trade_offer_item_command(ctx, amount: int, *, item_name: str):
         return
     item = normalize_mining_item(item_name)
     if item is None or amount < 1:
-        await ctx.reply("Use b!offeritem <amount> <item name> with an item from b!inventory.", mention_author=False)
+        await ctx.reply("Use /offeritem <amount> <item name> with an item from /inventory.", mention_author=False)
         return
     offer = trade_offer_for(trade, ctx.author.id)
     old = int(offer.setdefault("items", {}).get(item, 0))
@@ -4258,7 +4247,7 @@ async def trade_offer_item_command(ctx, amount: int, *, item_name: str):
     await ctx.reply(f"Item offer updated: {amount} {item}. Both confirmations were reset.", mention_author=False)
 
 
-@bot.command(name="tradeview")
+@bot.hybrid_command(name="tradeview")
 async def trade_view_command(ctx):
     trade = active_trade_for_channel(ctx.channel.id)
     if trade is None or ctx.author.id not in trade_member_ids(trade):
@@ -4280,7 +4269,7 @@ async def trade_view_command(ctx):
     )
 
 
-@bot.command(name="tradeconfirm")
+@bot.hybrid_command(name="tradeconfirm")
 async def trade_confirm_command(ctx):
     async with trade_completion_lock:
         trade = active_trade_for_channel(ctx.channel.id)
@@ -4297,7 +4286,7 @@ async def trade_confirm_command(ctx):
         save_economy()
         if not all(uid in confirmed for uid in ids):
             await ctx.reply(
-                f"Confirmation saved ({len(confirmed.intersection(ids))}/2). The other trader must review b!tradeview and confirm.",
+                f"Confirmation saved ({len(confirmed.intersection(ids))}/2). The other trader must review /tradeview and confirm.",
                 mention_author=False,
             )
             return
@@ -4328,7 +4317,7 @@ async def trade_confirm_command(ctx):
         print(f"BRAX: Could not delete completed trade channel: {error}")
 
 
-@bot.command(name="tradecancel")
+@bot.hybrid_command(name="tradecancel")
 async def trade_cancel_command(ctx):
     async with trade_completion_lock:
         trade = active_trade_for_channel(ctx.channel.id)
@@ -4351,9 +4340,9 @@ async def trade_cancel_command(ctx):
 
 HELP_PAGES = [
     {
-        "title": "BRAX • Command Access",
+        "title": "Kaydn Bot • Command Access",
         "description": (
-            "BRAX commands use the **b!** prefix. All BRAX staff commands are restricted "
+            "BRAX commands use the **/** prefix. All BRAX staff commands are restricted "
             "to members with <@&1571309152440025190> (**brax usage**). Old staff-role names "
             "and IDs no longer grant command access.\n\n"
             "**Special authorization**\n"
@@ -4369,93 +4358,93 @@ HELP_PAGES = [
             "Members with brax usage can use regular blacklist controls but cannot use "
             "Divine punishment unless their user ID is separately on the authorization list. "
             "The seven authorized accounts can open the blacklist menu for Divine punishment only. "
-            "Only Braxton and kaydnn can grant the brax usage role with `b!usageadd @user`."
+            "Only Braxton and kaydnn can grant the brax usage role with `/usageadd @user`."
         ),
-        "footer": "BRAX • Access Information",
+        "footer": "Kaydn Bot • Access Information",
     },
     {
         "title": "<a:Tools:1571303064256909482> Server Tools",
         "description": (
-            "`b!usageadd @user` — Give the brax usage role (Braxton and kaydnn only).\n"
-            "`b!lusageadd @user` — Give the Lesser B Usage role (any BRAX Usage member).\n"
-            "`b!ticketpanel` — Post the ticket panel.\n"
-            "`b!blacklist @user` — Open the blacklist menu.\n"
-            "`b!help` — Open this interactive help menu.\n"
+            "`/usageadd @user` — Give the brax usage role (Braxton and kaydnn only).\n"
+            "`/lusageadd @user` — Give the Lesser B Usage role (any BRAX Usage member).\n"
+            "`/ticketpanel` — Post the ticket panel.\n"
+            "`/blacklist @user` — Open the blacklist menu.\n"
+            "`/help` — Open this interactive help menu.\n"
             "`/help` — Show help privately."
         ),
-        "footer": "BRAX • Server Tools",
+        "footer": "Kaydn Bot • Server Tools",
     },
     {
         "title": "<:Moderation:1571302568070611045> Moderation",
         "description": (
-            "`b!timeout @user 10m reason` — Timeout a member. Aliases: `b!mute`, `b!tempmute`. "
+            "`/timeout @user 10m reason` — Timeout a member. Aliases: `/mute`, `/tempmute`. "
             "Requires Moderate Members; mention a member and provide duration and reason (maximum 28 days).\n"
-            "`b!untimeout @user [reason]` — Remove a timeout. Aliases: `b!unmute`, `b!removetimeout`.\n"
-            "`b!kick @user [reason]` — Kick a mentioned member. Requires Kick Members.\n"
-            "`b!ban @user [reason]` — Ban a mentioned member. Requires Ban Members.\n"
-            "`b!unban userID [reason]` — Unban by user ID. Requires Ban Members.\n"
-            "`b!warn @user reason` / `b!unwarn @user [case ID]` — Add or remove a permanent warning. Requires Moderate Members.\n"
-            "`b!lock [#channel]` / `b!unlock [#channel]` — Lock or unlock a text channel. Requires Manage Channels.\n"
-            "`b!purge 1-100` — Delete recent messages. Requires Manage Messages.\n"
-            "`b!roleadd @user @role [reason]` — Give a role. Requires Manage Roles and member/role mentions.\n"
-            "`b!roleremove @user @role [reason]` — Remove a role. Requires Manage Roles and member/role mentions."
+            "`/untimeout @user [reason]` — Remove a timeout. Aliases: `/unmute`, `/removetimeout`.\n"
+            "`/kick @user [reason]` — Kick a mentioned member. Requires Kick Members.\n"
+            "`/ban @user [reason]` — Ban a mentioned member. Requires Ban Members.\n"
+            "`/unban userID [reason]` — Unban by user ID. Requires Ban Members.\n"
+            "`/warn @user reason` / `/unwarn @user [case ID]` — Add or remove a permanent warning. Requires Moderate Members.\n"
+            "`/lock [#channel]` / `/unlock [#channel]` — Lock or unlock a text channel. Requires Manage Channels.\n"
+            "`/purge 1-100` — Delete recent messages. Requires Manage Messages.\n"
+            "`/roleadd @user @role [reason]` — Give a role. Requires Manage Roles and member/role mentions.\n"
+            "`/roleremove @user @role [reason]` — Remove a role. Requires Manage Roles and member/role mentions."
         ),
-        "footer": "BRAX • Moderation",
+        "footer": "Kaydn Bot • Moderation",
     },
     {
         "title": "<:Logging:1571302754272542852> Logging",
         "description": (
-            "`b!mlogs` — View your own BRAX actions. `b!mlogs @user` — View that member's history. Three logs per page.\n"
-            "`b!mlog [#channel]` — Set the moderation log channel. "
+            "`/mlogs` — View your own BRAX actions. `/mlogs @user` — View that member's history. Three logs per page.\n"
+            "`/mlog [#channel]` — Set the moderation log channel. "
             "If no channel is supplied, BRAX uses the channel where you run the command.\n\n"
             "Moderation, blacklist, and Fun actions are recorded with the affected member "
             "and the moderator who performed them."
         ),
-        "footer": "BRAX • Logging",
+        "footer": "Kaydn Bot • Logging",
     },
     {
         "title": "<:Fun:1571324174394200085> Fun",
         "description": (
-            "`b!mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n"
-            "`b!uwu @user` — Toggle advanced UWU lock with randomized stutters, word swaps and endings. "
+            "`/mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n"
+            "`/uwu @user` — Toggle advanced UWU lock with randomized stutters, word swaps and endings. "
             "Messages are relayed through a clearly labelled BRAX UWU webhook. Run it again to remove the lock.\n"
-            "`b!balance [@user]` — Check coins. `b!shop` / `b!store` — View the store. "
-            "`b!buy` — Purchase store items. `b!pay <amount>` — Pay a BRAX Coin tax bill; `b!pay tokens <amount>` — Pay a Token tax bill.\n"
+            "`/balance [@user]` — Check coins. `/shop` / `/store` — View the store. "
+            "`/buy` — Purchase store items. `/pay <amount>` — Pay a BRAX Coin tax bill; `/pay tokens <amount>` — Pay a Token tax bill.\n"
             "FBI tax bills have a random 1–3 minute deadline; missed bills trigger an 85–100% wallet seizure, and the bill remains due.\n"
-            "`b!coinflip heads|tails <amount>` and `b!gamble <amount> <2-30>` — Play coin games.\n"
-            "`b!coinlb` — View the BRAX Coin leaderboard. `b!coinadd @user <amount>` — Add coins (Braxton only).\n"
-            "`b!stocks`, `b!stockbuy`, `b!stocksell` — View and trade simulated shares.\n"
-            "`b!mine` — Dig for Mick & Rorty materials and collectibles (2.5-second cooldown). `b!inventory` — View your finds.\n"
-            "`b!jobs`, `b!job join <name>`, `b!job leave`, `b!work` — Choose a job and earn wages every 10 minutes. Leaving starts a 5-minute rejoin cooldown.\n"
-            "`b!crime` — Try a fictional crime for coins. Repeated attempts can get you caught by TBR and jailed for 1 minute.\n"
-            "`b!company` — Create a company, invite members, and manage its bank.\n"
-            "`b!cryptocreate`, `b!cryptomarket`, `b!cryptobuy`, `b!cryptosell` — Create and trade virtual community coins (5 tokens to create).\n"
-            "`b!sell <item> [amount]` — Sell selected finds; `b!sell inv` / `b!sell inventory` — Sell your entire sellable inventory for BRAX Coins. `b!trade @member` — Open a private item/coin trade.\n"
-            "Inside a trade: `b!offercoins`, `b!offeritem`, `b!tradeview`, `b!tradeconfirm`, `b!tradecancel`.\n\n"
+            "`/coinflip heads|tails <amount>` and `/gamble <amount> <2-30>` — Play coin games.\n"
+            "`/coinlb` — View the BRAX Coin leaderboard. `/coinadd @user <amount>` — Add coins (Braxton only).\n"
+            "`/stocks`, `/stockbuy`, `/stocksell` — View and trade simulated shares.\n"
+            "`/mine` — Dig for Mick & Rorty materials and collectibles (2.5-second cooldown). `/inventory` — View your finds.\n"
+            "`/jobs`, `/job join <name>`, `/job leave`, `/work` — Choose a job and earn wages every 10 minutes. Leaving starts a 5-minute rejoin cooldown.\n"
+            "`/crime` — Try a fictional crime for coins. Repeated attempts can get you caught by TBR and jailed for 1 minute.\n"
+            "`/company` — Create a company, invite members, and manage its bank.\n"
+            "`/cryptocreate`, `/cryptomarket`, `/cryptobuy`, `/cryptosell` — Create and trade virtual community coins (5 tokens to create).\n"
+            "`/sell <item> [amount]` — Sell selected finds; `/sell inv` / `/sell inventory` — Sell your entire sellable inventory for BRAX Coins. `/trade @member` — Open a private item/coin trade.\n"
+            "Inside a trade: `/offercoins`, `/offeritem`, `/tradeview`, `/tradeconfirm`, `/tradecancel`.\n\n"
             "UWU lock is restricted to the bot owner, Braxton, and ch33zee, and requires Manage Messages. Fun actions are also sent "
-            "to the moderation log and saved in the target member's `b!mlogs` history."
+            "to the moderation log and saved in the target member's `/mlogs` history."
         ),
-        "footer": "BRAX • Fun",
+        "footer": "Kaydn Bot • Fun",
     },
 ]
 
 GAMBLING_HELP_PAGE = {
     "title": "🎲 Gambling",
     "description": (
-        "`b!gamble <amount> <2-30>` — Bet any positive amount of BRAX Coins at a 2x–30x multiplier. "
+        "`/gamble <amount> <2-30>` — Bet any positive amount of BRAX Coins at a 2x–30x multiplier. "
         "Bets above 10x can put your balance into debt.\n"
-        "Example: `b!gamble 100 15`\n\n"
+        "Example: `/gamble 100 15`\n\n"
         "You have a 1-in-the-multiplier chance to win. Winning payouts are reduced by 40% when your wallet is at least 1,000 coins, and by 95% at 100,000 coins or more. A loss deducts the bet."
     ),
-    "footer": "BRAX • Gambling",
+    "footer": "Kaydn Bot • Gambling",
 }
 LESSER_FUN_HELP_PAGE = {
     "title": "<:Fun:1571324174394200085> Fun",
     "description": (
-        "`b!mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n\n"
-        "You can also use b!mine to dig, b!inventory to view finds, b!sell <item> to sell, and b!trade @member to open a private trade.\n\nUse the forward button to view the gambling commands."
+        "`/mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n\n"
+        "You can also use /mine to dig, /inventory to view finds, /sell <item> to sell, and /trade @member to open a private trade.\n\nUse the forward button to view the gambling commands."
     ),
-    "footer": "BRAX • Lesser B Usage",
+    "footer": "Kaydn Bot • Lesser B Usage",
 }
 LESSER_HELP_PAGES = [LESSER_FUN_HELP_PAGE, GAMBLING_HELP_PAGE]
 
@@ -4521,19 +4510,7 @@ class BraxHelpView(discord.ui.View):
         await self.update_page(interaction)
 
 
-@bot.command(name="help")
-async def brax_help_command(ctx):
-    if has_lesser_usage(ctx.author):
-        view = BraxHelpView(ctx.author.id, pages=LESSER_HELP_PAGES)
-        await ctx.reply(embed=make_help_embed(0, LESSER_HELP_PAGES), view=view, mention_author=False)
-        return
-    if not is_high_staff(ctx.author):
-        await ctx.reply(embed=make_help_embed(0, [GAMBLING_HELP_PAGE]), mention_author=False)
-        return
-    view = BraxHelpView(ctx.author.id)
-    await ctx.reply(embed=make_help_embed(0), view=view, mention_author=False)
-
-@bot.tree.command(name="help", description="Show BRAX help and public gambling commands.")
+@bot.tree.command(name="help", description="Show Kaydn Bot help and public commands.")
 async def brax_slash_help_command(interaction: discord.Interaction):
     if has_lesser_usage(interaction.user):
         view = BraxHelpView(interaction.user.id, pages=LESSER_HELP_PAGES)
@@ -4543,15 +4520,15 @@ async def brax_slash_help_command(interaction: discord.Interaction):
         await interaction.response.send_message(embed=make_help_embed(0, [GAMBLING_HELP_PAGE]), ephemeral=True)
         return
     embed = discord.Embed(
-        title="BRAX Commands",
-        description="Commands available to members with the BRAX Usage role:",
+        title="Kaydn Bot Commands",
+        description="Commands available according to your Kaydn staff role:",
         color=discord.Color.from_rgb(58, 48, 35),
     )
-    embed.add_field(name="Moderation", value="b!timeout, b!untimeout, b!kick, b!ban, b!unban, b!warn, b!unwarn, b!lock, b!unlock, b!purge, b!roleadd, b!roleremove", inline=False)
-    embed.add_field(name="Logging", value="b!mlog [#channel] sets the moderation log channel.", inline=False)
-    embed.add_field(name="Server Tools", value="b!ticketpanel, b!blacklist @user, b!lusageadd @user, b!help, /help", inline=False)
-    embed.add_field(name="Fun, Economy & Mining", value="b!mweute, b!uwu, b!balance, b!shop, b!buy, b!coinflip, b!gamble, b!coinlb, b!stocks, b!mine, b!inventory, b!sell, b!trade", inline=False)
-    embed.set_footer(text="BRAX • BRAX Usage Role Only")
+    embed.add_field(name="Moderation", value="/timeout, /untimeout, /kick, /ban, /unban, /warn, /unwarn, /lock, /unlock, /purge, /roleadd, /roleremove", inline=False)
+    embed.add_field(name="Logging", value="/mlog [#channel] sets the moderation log channel.", inline=False)
+    embed.add_field(name="Server Tools", value="/ticketpanel, /blacklist @user, /lusageadd @user, /help, /help", inline=False)
+    embed.add_field(name="Fun, Economy & Mining", value="/mweute, /uwu, /balance, /shop, /buy, /coinflip, /gamble, /coinlb, /stocks, /mine, /inventory, /sell, /trade", inline=False)
+    embed.set_footer(text="Kaydn Bot • BRAX Usage Role Only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 if not TOKEN:
@@ -4559,7 +4536,7 @@ if not TOKEN:
         "BOT_TOKEN is missing. Add BOT_TOKEN to your hosting panel's environment variables."
     )
 
-print("BRAX BUILD: bot-hosting-migration-ready | sapphire-style-warn-purge | channel-locks | final-blacklist-overwrite-cleanup | no-custom-role-sales | usage-price-24000000 | lesser-gambling-role-protection | discord-429-login-backoff")
+print("KAYDN BUILD: bot-hosting-migration-ready | sapphire-style-warn-purge | channel-locks | final-blacklist-overwrite-cleanup | no-custom-role-sales | usage-price-24000000 | lesser-gambling-role-protection | discord-429-login-backoff")
 
 async def run_brax_with_login_backoff():
     # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
@@ -4584,7 +4561,7 @@ async def run_brax_with_login_backoff():
             delay = retry_delays[min(retry_number, len(retry_delays) - 1)]
             retry_number += 1
             print(
-                f"BRAX Discord login was rate-limited (HTTP 429). "
+                f"Kaydn Bot Discord login was rate-limited (HTTP 429). "
                 f"HTTP session closed. Waiting {delay // 60} minutes before retrying. "
                 f"This is a Discord/Cloudflare access restriction, not a bot command error."
             )
