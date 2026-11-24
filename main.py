@@ -2409,9 +2409,12 @@ async def moderation_gate(ctx, permission_name):
         await ctx.reply(f"{EMOJIS['denied']} This command requires **{names[minimum_level]}** or higher.", mention_author=False)
         return False
     bot_member = ctx.guild.me
-    if bot_member is None or not getattr(bot_member.guild_permissions, permission_name, False):
-        await ctx.reply(f"{EMOJIS['denied']} Kaydn Bot needs the **{permission_name.replace('_', ' ').title()}** permission.", mention_author=False)
-        return False
+    # Warnings are stored by Kaydn Bot, and changing the moderation-log
+    # destination does not require these Discord permissions from the bot.
+    if permission_name not in {"moderate_members", "manage_guild"}:
+        if bot_member is None or not getattr(bot_member.guild_permissions, permission_name, False):
+            await ctx.reply(f"{EMOJIS['denied']} Kaydn Bot needs the **{permission_name.replace('_', ' ').title()}** permission.", mention_author=False)
+            return False
     return True
 
 
@@ -4343,9 +4346,13 @@ HELP_PAGES = [
     {
         "title": "Kaydn Bot • Command Access",
         "description": (
-            "BRAX commands use the **/** prefix. All BRAX staff commands are restricted "
-            "to members with <@&1571309152440025190> (**brax usage**). Old staff-role names "
-            "and IDs no longer grant command access.\n\n"
+            "Kaydn Bot uses Discord slash commands only; old text prefixes are disabled. "
+            "Staff access is based on the five configured Kaydn staff roles:\n"
+            "• Trial Staff — warnings, channel locks, and purges up to 20 messages.\n"
+            "• Senior Staff — Trial Staff commands plus timeouts and kicks; purges up to 50.\n"
+            "• Server Staff — Senior Staff commands plus bans, unbans, ticket panel, and Lesser Usage grants.\n"
+            "• Admins — Server Staff commands plus role management, blacklist controls, and moderation-log settings.\n"
+            "• Head Staff — all staff commands and legacy Usage-role grants.\n\n"
             "**Special authorization**\n"
             "The seven people listed below are specifically allowed to assign or remove "
             "the Divine punishment role:\n"
@@ -4367,9 +4374,9 @@ HELP_PAGES = [
         "title": "<a:Tools:1571303064256909482> Server Tools",
         "description": (
             "`/usageadd @user` — Give the brax usage role (Braxton and kaydnn only).\n"
-            "`/lusageadd @user` — Give the Lesser B Usage role (any BRAX Usage member).\n"
-            "`/ticketpanel` — Post the ticket panel.\n"
-            "`/blacklist @user` — Open the blacklist menu.\n"
+            "`/lusageadd @user` — Give the Lesser B Usage role (Server Staff+).\n"
+            "`/ticketpanel` — Post the ticket panel (Server Staff+).\n"
+            "`/blacklist @user` — Open the blacklist menu (Admins+ or authorized accounts).\n"
             "`/help` — Open this interactive help menu.\n"
             "`/help` — Show help privately."
         ),
@@ -4380,15 +4387,15 @@ HELP_PAGES = [
         "description": (
             "`/timeout @user 10m reason` — Timeout a member. Aliases: `/mute`, `/tempmute`. "
             "Requires Moderate Members; mention a member and provide duration and reason (maximum 28 days).\n"
-            "`/untimeout @user [reason]` — Remove a timeout. Aliases: `/unmute`, `/removetimeout`.\n"
-            "`/kick @user [reason]` — Kick a mentioned member. Requires Kick Members.\n"
-            "`/ban @user [reason]` — Ban a mentioned member. Requires Ban Members.\n"
-            "`/unban userID [reason]` — Unban by user ID. Requires Ban Members.\n"
-            "`/warn @user reason` / `/unwarn @user [case ID]` — Add or remove a permanent warning. Requires Moderate Members.\n"
-            "`/lock [#channel]` / `/unlock [#channel]` — Lock or unlock a text channel. Requires Manage Channels.\n"
-            "`/purge 1-100` — Delete recent messages. Requires Manage Messages.\n"
-            "`/roleadd @user @role [reason]` — Give a role. Requires Manage Roles and member/role mentions.\n"
-            "`/roleremove @user @role [reason]` — Remove a role. Requires Manage Roles and member/role mentions."
+            "`/untimeout @user [reason]` — Remove a timeout (Senior Staff+).\n"
+            "`/kick @user [reason]` — Kick a member (Senior Staff+).\n"
+            "`/ban @user [reason]` — Ban a member (Server Staff+).\n"
+            "`/unban userID [reason]` — Unban by user ID (Server Staff+).\n"
+            "`/warn @user reason` / `/unwarn @user [case ID]` — Add or remove a permanent warning (Trial Staff+).\n"
+            "`/lock [#channel]` / `/unlock [#channel]` — Lock or unlock a text channel (Trial Staff+).\n"
+            "`/purge 1-20/50/100` — Delete recent messages (Trial/Senior/Server Staff+).\n"
+            "`/roleadd @user @role [reason]` — Give a role (Admins+).\n"
+            "`/roleremove @user @role [reason]` — Remove a role (Admins+)."
         ),
         "footer": "Kaydn Bot • Moderation",
     },
@@ -4527,9 +4534,9 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     )
     embed.add_field(name="Moderation", value="/timeout, /untimeout, /kick, /ban, /unban, /warn, /unwarn, /lock, /unlock, /purge, /roleadd, /roleremove", inline=False)
     embed.add_field(name="Logging", value="/mlog [#channel] sets the moderation log channel.", inline=False)
-    embed.add_field(name="Server Tools", value="/ticketpanel, /blacklist @user, /lusageadd @user, /help, /help", inline=False)
+    embed.add_field(name="Server Tools", value="/ticketpanel (Server Staff+), /blacklist (Admins+), /lusageadd (Server Staff+), /help", inline=False)
     embed.add_field(name="Fun, Economy & Mining", value="/mweute, /uwu, /balance, /shop, /buy, /coinflip, /gamble, /coinlb, /stocks, /mine, /inventory, /sell, /trade", inline=False)
-    embed.set_footer(text="Kaydn Bot • BRAX Usage Role Only")
+    embed.set_footer(text="Kaydn Bot • Staff tiers apply")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 if not TOKEN:
