@@ -2739,7 +2739,7 @@ async def fake_mute_command(ctx, member: discord.Member):
 
 @bot.hybrid_command(name="uwu")
 async def uwu_command(ctx, member: discord.Member):
-    if not is_uwu_authorized(ctx.author):
+    if not (is_uwu_authorized(ctx.author) or has_staff_level(ctx.author, 4)):
         await ctx.reply(f"{EMOJIS['denied']} Only authorized users can use UWU lock.", mention_author=False)
         return
     if not ctx.author.guild_permissions.manage_messages:
@@ -4429,7 +4429,7 @@ HELP_PAGES = [
             "`/cryptocreate`, `/cryptomarket`, `/cryptobuy`, `/cryptosell` — Create and trade virtual community coins (5 tokens to create).\n"
             "`/sell <item> [amount]` — Sell selected finds; `/sell inv` / `/sell inventory` — Sell your entire sellable inventory for BRAX Coins. `/trade @member` — Open a private item/coin trade.\n"
             "Inside a trade: `/offercoins`, `/offeritem`, `/tradeview`, `/tradeconfirm`, `/tradecancel`.\n\n"
-            "UWU lock is restricted to the bot owner, Braxton, and ch33zee, and requires Manage Messages. Fun actions are also sent "
+            "UWU lock is restricted to Admins+, the bot owner, Braxton, and ch33zee, and requires Kaydn Bot to have Manage Messages. Fun actions are also sent "
             "to the moderation log and saved in the target member's `/mlogs` history."
         ),
         "footer": "Kaydn Bot • Fun",
