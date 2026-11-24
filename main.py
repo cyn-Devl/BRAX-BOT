@@ -1330,18 +1330,30 @@ async def on_message(message):
     # Enforce Divine punishment at message level as a fallback to channel
     # permissions. Delete messages written by punished members.
     author = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
-    # Per-member @everyone/@here escalation for members with the configured Member role.
-    member_role = message.guild.get_role(778185805834485771)
-    is_member = author is not None and not author.bot and member_role is not None and member_role in author.roles
-    if is_member and message.mention_everyone:
+    # Only Head Staff, Senior Staff, and Admins may use mass mentions or role pings.
+    # All other members have @everyone, @here, and role-mention messages removed.
+    allowed_mass_ping_roles = {
+        HEAD_STAFF_ROLE_ID,
+        SENIOR_STAFF_ROLE_ID,
+        ADMIN_ROLE_ID,
+    }
+    can_mass_ping = (
+        author is not None
+        and any(role.id in allowed_mass_ping_roles for role in author.roles)
+    )
+    attempted_mass_ping = message.mention_everyone or bool(message.role_mentions)
+
+    if author is not None and not author.bot and attempted_mass_ping and not can_mass_ping:
         try:
             await message.delete()
         except discord.Forbidden:
-            print("KAYDN: Missing Manage Messages permission; couldn't delete an everyone ping.")
+            print("KAYDN: Missing Manage Messages permission; couldn't delete a restricted mass/role ping.")
+            return
         except discord.HTTPException as error:
-            print(f"KAYDN: Couldn't delete an everyone ping: {error}")
+            print(f"KAYDN: Couldn't delete a restricted mass/role ping: {error}")
             return
 
+        # Strike keys include both guild and user IDs, so each person's escalation is independent.
         strikes = economy_data.setdefault("everyone_ping_strikes", {})
         strike_key = economy_key(message.guild.id, author.id)
         strike_count = int(strikes.get(strike_key, 0)) + 1
@@ -1351,12 +1363,19 @@ async def on_message(message):
         if strike_count == 1:
             embed = discord.Embed(
                 title="⚠️ Verbal Warning",
-                description=f"{author.mention}, don't use **@everyone** or **@here**. Your message was removed. Another attempt will result in a timeout.",
+                description=(
+                    f"{author.mention}, mass pings and role mentions are restricted to "
+                    "**Head Staff, Senior Staff, and Admins**. Your message was removed. "
+                    "Another attempt will result in a 10-minute timeout."
+                ),
                 color=discord.Color.orange(),
             )
             embed.add_field(name="Warning", value="1st incident — verbal warning", inline=False)
             try:
-                await message.channel.send(embed=embed, delete_after=15, allowed_mentions=discord.AllowedMentions.none())
+                await message.channel.send(
+                    embed=embed, delete_after=15,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             except discord.HTTPException:
                 pass
         else:
@@ -1364,25 +1383,28 @@ async def on_message(message):
             try:
                 await author.timeout(
                     timedelta(minutes=timeout_minutes),
-                    reason=f"Repeated @everyone/@here ping (incident {strike_count})",
+                    reason=f"Repeated restricted mass/role ping (incident {strike_count})",
                 )
                 embed = discord.Embed(
-                    title="⏱️ Anti-Everyone Timeout",
-                    description=f"{author.mention}'s message was removed and they were timed out.",
+                    title="⏱️ Anti-Mass-Ping Timeout",
+                    description=f"{author.mention}'s restricted ping was removed and they were timed out.",
                     color=discord.Color.red(),
                 )
                 embed.add_field(name="Incident", value=str(strike_count), inline=True)
                 embed.add_field(name="Timeout", value=f"{timeout_minutes} minutes", inline=True)
                 embed.add_field(name="Escalation", value="Each additional attempt adds 10 minutes.", inline=False)
-                await message.channel.send(embed=embed, delete_after=20, allowed_mentions=discord.AllowedMentions.none())
+                await message.channel.send(
+                    embed=embed, delete_after=20,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             except discord.Forbidden:
                 await message.channel.send(
-                    "⚠️ The everyone ping was deleted, but Kaydn Bot cannot timeout this member. Check its Moderate Members permission and role position.",
+                    "⚠️ The restricted ping was deleted, but Kaydn Bot cannot timeout this member. Check its Moderate Members permission and role position.",
                     delete_after=20,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except discord.HTTPException as error:
-                print(f"KAYDN: Could not timeout everyone-ping member: {error}")
+                print(f"KAYDN: Could not timeout restricted-ping member: {error}")
         return
 
     if author is not None and has_blacklist(author, "Divine punishment"):
@@ -4473,7 +4495,7 @@ if not TOKEN:
         "BOT_TOKEN is missing. Add BOT_TOKEN to your hosting panel's environment variables."
     )
 
-print("KAYDN BUILD: slash-only-staff-tiers | anti-everyone-escalation | no-gambling | sapphire-style-warn-purge | channel-locks")
+print("KAYDN BUILD: slash-only-staff-tiers | restricted-mass-pings-head-senior-admin | per-user-escalation | no-gambling | sapphire-style-warn-purge | channel-locks")
 
 async def run_brax_with_login_backoff():
     # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
