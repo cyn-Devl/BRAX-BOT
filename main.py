@@ -27,12 +27,19 @@ ADMIN_ROLE_ID = 1574454576927613048
 SERVER_STAFF_ROLE_ID = 1574232993113972806
 SENIOR_STAFF_ROLE_ID = 1574232953716744262
 TRIAL_STAFF_ROLE_ID = 1574225656235958292
+COMMUNITY_MANAGER_ROLE_ID = 1563780147134603325
+CO_OWNER_ROLE_ID = 1574491456167612436
+OWNER_ROLE_ID = 1572378574034567369
+# These three leadership roles inherit every staff command and mass-ping permission.
 STAFF_ROLE_LEVELS = {
     TRIAL_STAFF_ROLE_ID: 1,
     SENIOR_STAFF_ROLE_ID: 2,
     SERVER_STAFF_ROLE_ID: 3,
     ADMIN_ROLE_ID: 4,
     HEAD_STAFF_ROLE_ID: 5,
+    COMMUNITY_MANAGER_ROLE_ID: 6,
+    CO_OWNER_ROLE_ID: 6,
+    OWNER_ROLE_ID: 6,
 }
 STAFF_ROLE_IDS = set(STAFF_ROLE_LEVELS)
 STAFF_ROLE_KEYWORDS = (
@@ -1336,6 +1343,9 @@ async def on_message(message):
         HEAD_STAFF_ROLE_ID,
         SENIOR_STAFF_ROLE_ID,
         ADMIN_ROLE_ID,
+        COMMUNITY_MANAGER_ROLE_ID,
+        CO_OWNER_ROLE_ID,
+        OWNER_ROLE_ID,
     }
     can_mass_ping = (
         author is not None
@@ -1447,17 +1457,6 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    earned_coins = award_message_coin(message)
-    if earned_coins:
-        try:
-            await message.channel.send(
-                f"{message.author.mention} earned {BRAX_COINS_EMOJI} **1 BRAX Coin**! Balance: **{coin_balance(message.guild.id, message.author.id)}**",
-                delete_after=8,
-                allowed_mentions=discord.AllowedMentions(users=True),
-            )
-        except discord.HTTPException:
-            pass
-
     # Jail enforcement: block all prefix commands until the one-minute sentence ends.
     member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
     if member is not None and member.id != 997577147667460186 and message.content.startswith("/"):
@@ -1529,8 +1528,7 @@ async def on_message(message):
     while len(message_cache) > MAX_MESSAGE_CACHE:
         message_cache.popitem(last=False)
 
-    # This custom on_message handler must pass messages to prefix commands.
-    await bot.process_commands(message)
+    # Prefix command processing is intentionally disabled. Kaydn Bot is slash-command only.
 
 
 @bot.event
@@ -3258,7 +3256,6 @@ class BraxShopView(discord.ui.View):
         if self.page == 0:
             title = f"{BRAX_COINS_EMOJI} BRAX Store • Regular Shop"
             description = (
-                "Earn 1 BRAX Coin every 10 messages.\n\n"
                 "50 Coins — Lesser BRAX Usage: /buy lesser\n"
                 "24,000,000 Coins — BRAX Usage (staff review): /buy usage\n"
                 "40 Coins — Remove one regular blacklist: /buy unblacklist\n"
@@ -3466,7 +3463,7 @@ async def buy_command(ctx, item: str, *, details: str = ""):
 @bot.hybrid_command(name="coinadd")
 async def coinadd_command(ctx, member: discord.Member, amount: int):
     # Only Braxton's Discord account may use this economy-admin command.
-    if ctx.author.id != 1511412885040009309:
+    if ctx.author.id != 1511412885040009309 and not has_staff_level(ctx.author, 6):
         await ctx.reply("You aren't authorized to use this command.", mention_author=False)
         return
     if amount <= 0:
@@ -4325,14 +4322,14 @@ HELP_PAGES = [
             "Members with brax usage can use regular blacklist controls but cannot use "
             "Divine punishment unless their user ID is separately on the authorization list. "
             "The seven authorized accounts can open the blacklist menu for Divine punishment only. "
-            "Only Braxton and kaydnn can grant the brax usage role with `/usageadd @user`."
+            "Head Staff, Community Manager, Co-Owner, and Owner can grant the legacy BRAX Usage role with `/usageadd @user`."
         ),
         "footer": "Kaydn Bot • Access Information",
     },
     {
         "title": "<a:Tools:1571303064256909482> Server Tools",
         "description": (
-            "`/usageadd @user` — Give the brax usage role (Braxton and kaydnn only).\n"
+            "`/usageadd @user` — Give the legacy BRAX Usage role (Head Staff and above).\n"
             "`/lusageadd @user` — Give the Lesser B Usage role (Server Staff+).\n"
             "`/ticketpanel` — Post the ticket panel (Server Staff+).\n"
             "`/blacklist @user` — Open the blacklist menu (Admins+ or authorized accounts).\n"
@@ -4495,7 +4492,7 @@ if not TOKEN:
         "BOT_TOKEN is missing. Add BOT_TOKEN to your hosting panel's environment variables."
     )
 
-print("KAYDN BUILD: slash-only-staff-tiers | restricted-mass-pings-head-senior-admin | per-user-escalation | no-gambling | sapphire-style-warn-purge | channel-locks")
+print("KAYDN BUILD: slash-only | leadership-full-access | mass-ping-head-senior-admin-management-coowner-owner | per-user-escalation | no-message-coin-farming | no-gambling | sapphire-style-warn-purge | channel-locks")
 
 async def run_brax_with_login_backoff():
     # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
