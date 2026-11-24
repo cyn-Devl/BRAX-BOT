@@ -986,28 +986,7 @@ async def on_message(message):
             f"role_mentions={[role.id for role in message.role_mentions]}"
         )
 
-        if strike_count == 1:
-            embed = discord.Embed(
-                title="⚠️ Verbal Warning",
-                description=(
-                    f"{author.mention}, @everyone, @here, and role pings are restricted "
-                    "to Head Staff, Senior Staff, Admins, and server leadership. "
-                    + ("Your message was deleted. " if deleted else "Kaydn could not delete your message. ")
-                    + "Another attempt will result in a 10-minute timeout."
-                ),
-                color=discord.Color.orange(),
-            )
-            embed.add_field(name="Warning", value="1st incident — verbal warning", inline=False)
-            try:
-                await message.channel.send(
-                    embed=embed,
-                    delete_after=20,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-                print(f"KAYDN ANTI-PING: verbal warning sent for user={author.id}")
-            except discord.HTTPException as error:
-                print(f"KAYDN ANTI-PING: warning send failed for user={author.id}: {error}")
-        else:
+        if strike_count > 1:
             timeout_minutes = min((strike_count - 1) * 10, 40320)
             try:
                 await author.timeout(
@@ -1018,38 +997,23 @@ async def on_message(message):
                     f"KAYDN ANTI-PING: timeout applied user={author.id} "
                     f"incident={strike_count} minutes={timeout_minutes}"
                 )
-                embed = discord.Embed(
-                    title="⏱️ Anti-Mass-Ping Timeout",
-                    description=f"{author.mention} received a timeout for a restricted ping.",
-                    color=discord.Color.red(),
-                )
-                embed.add_field(name="Incident", value=str(strike_count), inline=True)
-                embed.add_field(name="Timeout", value=f"{timeout_minutes} minutes", inline=True)
-                embed.add_field(name="Escalation", value="Each new incident adds 10 minutes.", inline=False)
-                try:
-                    await message.channel.send(
-                        embed=embed,
-                        delete_after=20,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                except discord.HTTPException as error:
-                    print(f"KAYDN ANTI-PING: timeout notice failed: {error}")
             except discord.Forbidden as error:
                 print(
                     f"KAYDN ANTI-PING: timeout forbidden for user={author.id}: {error}. "
                     "Check Moderate Members and role hierarchy."
                 )
-                try:
-                    await message.channel.send(
-                        "⚠️ Kaydn detected the restricted ping, but Discord denied the timeout. "
-                        "Check Kaydn's Moderate Members permission and role position.",
-                        delete_after=20,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                except discord.HTTPException:
-                    pass
             except discord.HTTPException as error:
                 print(f"KAYDN ANTI-PING: timeout failed for user={author.id}: {error}")
+
+        try:
+            await message.channel.send(
+                "Stop it",
+                delete_after=10,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            print(f"KAYDN ANTI-PING: simple warning sent for user={author.id}")
+        except discord.HTTPException as error:
+            print(f"KAYDN ANTI-PING: warning send failed for user={author.id}: {error}")
         return
 
     if author is not None and has_blacklist(author, "Divine punishment"):
