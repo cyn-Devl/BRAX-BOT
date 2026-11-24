@@ -920,8 +920,7 @@ async def on_message(message):
     # Enforce Divine punishment at message level as a fallback to channel
     # permissions. Delete messages written by punished members.
     author = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
-    # Only Head Staff, Senior Staff, and Admins may use mass mentions or role pings.
-    # All other members have @everyone, @here, and role-mention messages removed.
+    # Only Head Staff, Senior Staff, Admins, and server leadership may use mass/role pings.
     allowed_mass_ping_roles = {
         HEAD_STAFF_ROLE_ID,
         SENIOR_STAFF_ROLE_ID,
@@ -937,40 +936,50 @@ async def on_message(message):
     attempted_mass_ping = message.mention_everyone or bool(message.role_mentions)
 
     if author is not None and not author.bot and attempted_mass_ping and not can_mass_ping:
+        # Apply the strike even if message deletion fails, so missing Manage Messages
+        # permission cannot silently bypass the warning/timeout system.
+        deleted = False
         try:
             await message.delete()
+            deleted = True
         except discord.Forbidden:
-            print("KAYDN: Missing Manage Messages permission; couldn't delete a restricted mass/role ping.")
-            return
+            print("KAYDN ANTI-PING: Missing Manage Messages; continuing with punishment.")
         except discord.HTTPException as error:
-            print(f"KAYDN: Couldn't delete a restricted mass/role ping: {error}")
-            return
+            print(f"KAYDN ANTI-PING: Message deletion failed; continuing with punishment: {error}")
 
-        # Strike keys include both guild and user IDs, so each person's escalation is independent.
         strikes = economy_data.setdefault("everyone_ping_strikes", {})
         strike_key = economy_key(message.guild.id, author.id)
         strike_count = int(strikes.get(strike_key, 0)) + 1
         strikes[strike_key] = strike_count
         save_economy()
+        print(
+            f"KAYDN ANTI-PING: user={author.id} incident={strike_count} "
+            f"deleted={deleted} everyone={message.mention_everyone} "
+            f"role_mentions={[role.id for role in message.role_mentions]}"
+        )
 
         if strike_count == 1:
             embed = discord.Embed(
                 title="⚠️ Verbal Warning",
                 description=(
                     f"{author.mention}, mass pings and role mentions are restricted to "
-                    "**Head Staff, Senior Staff, and Admins**. Your message was removed. "
-                    "Another attempt will result in a 10-minute timeout."
+                    "**Head Staff, Senior Staff, Admins, and server leadership**. "
+                    + ("Your message was removed. " if deleted else "I couldn't remove your message. ")
+                    + "Another attempt will result in a 10-minute timeout."
                 ),
                 color=discord.Color.orange(),
             )
             embed.add_field(name="Warning", value="1st incident — verbal warning", inline=False)
             try:
                 await message.channel.send(
-                    embed=embed, delete_after=15,
+                    embed=embed,
+                    delete_after=15,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-            except discord.HTTPException:
-                pass
+            except discord.Forbidden:
+                print("KAYDN ANTI-PING: Cannot send the verbal warning in this channel.")
+            except discord.HTTPException as error:
+                print(f"KAYDN ANTI-PING: Could not send verbal warning: {error}")
         else:
             timeout_minutes = min((strike_count - 1) * 10, 40320)
             try:
@@ -980,24 +989,37 @@ async def on_message(message):
                 )
                 embed = discord.Embed(
                     title="⏱️ Anti-Mass-Ping Timeout",
-                    description=f"{author.mention}'s restricted ping was removed and they were timed out.",
+                    description=(
+                        f"{author.mention}'s restricted ping was "
+                        + ("removed" if deleted else "not removed because Kaydn lacks Manage Messages")
+                        + f", and they were timed out."
+                    ),
                     color=discord.Color.red(),
                 )
                 embed.add_field(name="Incident", value=str(strike_count), inline=True)
                 embed.add_field(name="Timeout", value=f"{timeout_minutes} minutes", inline=True)
                 embed.add_field(name="Escalation", value="Each additional attempt adds 10 minutes.", inline=False)
                 await message.channel.send(
-                    embed=embed, delete_after=20,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            except discord.Forbidden:
-                await message.channel.send(
-                    "⚠️ The restricted ping was deleted, but Kaydn Bot cannot timeout this member. Check its Moderate Members permission and role position.",
+                    embed=embed,
                     delete_after=20,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
+            except discord.Forbidden:
+                print(
+                    f"KAYDN ANTI-PING: Timeout denied for user={author.id}. "
+                    "Check Moderate Members permission and bot role hierarchy."
+                )
+                try:
+                    await message.channel.send(
+                        "⚠️ The restricted ping was detected, but Kaydn Bot cannot timeout this member. "
+                        "Check its Moderate Members permission and role position.",
+                        delete_after=20,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    pass
             except discord.HTTPException as error:
-                print(f"KAYDN: Could not timeout restricted-ping member: {error}")
+                print(f"KAYDN ANTI-PING: Could not timeout user={author.id}: {error}")
         return
 
     if author is not None and has_blacklist(author, "Divine punishment"):
