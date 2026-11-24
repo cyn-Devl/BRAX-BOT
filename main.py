@@ -840,7 +840,8 @@ async def tbr_tax_loop():
                 if now < float(company.get("political_power_tax_at", now + 3600)):
                     continue
                 pp_bank = max(0, int(company.get("political_power_bank", 0)))
-                tax_amount = min(pp_bank, int(pp_bank * 0.9525))
+                # Integer-only percentage math avoids float overflow on huge balances.
+                tax_amount = min(pp_bank, (pp_bank * 9525) // 10000)
                 company["political_power_bank"] = pp_bank - tax_amount
                 pp_treasury[treasury_key] = int(pp_treasury.get(treasury_key, 0)) + tax_amount
                 company["political_power_tax_at"] = now + 3600
@@ -918,10 +919,12 @@ async def tbr_tax_loop():
                         coin_rate = random.uniform(0.35, 0.45)
                     else:
                         coin_rate = random.uniform(0.45, 0.75)
-                    coin_tax = min(wallet, max(1, int(wallet * coin_rate)))
+                    coin_rate_basis_points = int(coin_rate * 10000)
+                    coin_tax = min(wallet, max(1, (wallet * coin_rate_basis_points) // 10000))
                 if tokens >= 30:
                     token_rate = random.uniform(0.30, 0.50)
-                    token_tax = min(tokens, max(1, int(tokens * token_rate)))
+                    token_rate_basis_points = int(token_rate * 10000)
+                    token_tax = min(tokens, max(1, (tokens * token_rate_basis_points) // 10000))
                 if coin_tax <= 0 and token_tax <= 0:
                     economy_data["next_personal_tax_at"][account_key] = now + 180
                     continue
