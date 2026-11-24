@@ -958,7 +958,7 @@ async def on_message(message):
         message.mention_everyone
         or bool(message.role_mentions)
         or bool(raw_role_mentions)
-        or bool(re.search(r"@(everyone|here)\\b", message.content or "", re.IGNORECASE))
+        or bool(re.search(r"@(everyone|here)\b", message.content or "", re.IGNORECASE))
     )
 
     if author is not None and not author.bot and attempted_mass_ping and not can_mass_ping:
