@@ -1330,6 +1330,61 @@ async def on_message(message):
     # Enforce Divine punishment at message level as a fallback to channel
     # permissions. Delete messages written by punished members.
     author = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
+    # Per-member @everyone/@here escalation for members with the configured Member role.
+    member_role = message.guild.get_role(778185805834485771)
+    is_member = author is not None and not author.bot and member_role is not None and member_role in author.roles
+    if is_member and message.mention_everyone:
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            print("KAYDN: Missing Manage Messages permission; couldn't delete an everyone ping.")
+        except discord.HTTPException as error:
+            print(f"KAYDN: Couldn't delete an everyone ping: {error}")
+            return
+
+        strikes = economy_data.setdefault("everyone_ping_strikes", {})
+        strike_key = economy_key(message.guild.id, author.id)
+        strike_count = int(strikes.get(strike_key, 0)) + 1
+        strikes[strike_key] = strike_count
+        save_economy()
+
+        if strike_count == 1:
+            embed = discord.Embed(
+                title="⚠️ Verbal Warning",
+                description=f"{author.mention}, don't use **@everyone** or **@here**. Your message was removed. Another attempt will result in a timeout.",
+                color=discord.Color.orange(),
+            )
+            embed.add_field(name="Warning", value="1st incident — verbal warning", inline=False)
+            try:
+                await message.channel.send(embed=embed, delete_after=15, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                pass
+        else:
+            timeout_minutes = min((strike_count - 1) * 10, 40320)
+            try:
+                await author.timeout(
+                    timedelta(minutes=timeout_minutes),
+                    reason=f"Repeated @everyone/@here ping (incident {strike_count})",
+                )
+                embed = discord.Embed(
+                    title="⏱️ Anti-Everyone Timeout",
+                    description=f"{author.mention}'s message was removed and they were timed out.",
+                    color=discord.Color.red(),
+                )
+                embed.add_field(name="Incident", value=str(strike_count), inline=True)
+                embed.add_field(name="Timeout", value=f"{timeout_minutes} minutes", inline=True)
+                embed.add_field(name="Escalation", value="Each additional attempt adds 10 minutes.", inline=False)
+                await message.channel.send(embed=embed, delete_after=20, allowed_mentions=discord.AllowedMentions.none())
+            except discord.Forbidden:
+                await message.channel.send(
+                    "⚠️ The everyone ping was deleted, but Kaydn Bot cannot timeout this member. Check its Moderate Members permission and role position.",
+                    delete_after=20,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException as error:
+                print(f"KAYDN: Could not timeout everyone-ping member: {error}")
+        return
+
     if author is not None and has_blacklist(author, "Divine punishment"):
         try:
             await message.delete()
@@ -3404,124 +3459,6 @@ async def coinadd_command(ctx, member: discord.Member, amount: int):
         allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
     )
 
-@bot.hybrid_command(name="coinflip", aliases=["flip"])
-async def coinflip_command(ctx, side: str, amount: int):
-    side = side.casefold()
-    if side not in {"heads", "tails", "h", "t"} or not 1 <= amount <= MAX_GAMBLE_BET:
-        await ctx.reply(f"Use /coinflip heads 10 or /coinflip tails 10 (1–{MAX_GAMBLE_BET} coins). {COINFLIP_EMOJI}", mention_author=False)
-        return
-    starting_balance = coin_balance(ctx.guild.id, ctx.author.id)
-    if not spend_coins(ctx.guild.id, ctx.author.id, amount):
-        await ctx.reply("Not enough BRAX Coins.", mention_author=False)
-        return
-    result = random.choice(["heads", "tails"])
-    won = side[0] == result[0]
-    payout_reduction = 0.95 if starting_balance >= 100_000 else (0.40 if starting_balance >= 1_000 else 0.0)
-    if won:
-        gross_payout = amount * 2
-        payout = int(gross_payout * (1 - payout_reduction))
-        add_coins(ctx.guild.id, ctx.author.id, payout)
-    else:
-        payout = 0
-    reduction_note = f" Your payout was reduced by {payout_reduction * 100:.0f}% due to your wallet tier." if payout_reduction else ""
-    await ctx.reply(f"{COINFLIP_EMOJI} **{result.title()}!** " + (f"You won {payout:,} coins." if won else f"You lost {amount:,} coins.") + reduction_note + f" Balance: {coin_balance(ctx.guild.id, ctx.author.id)} {BRAX_COINS_EMOJI}", mention_author=False)
-
-@bot.hybrid_command(name="gamble")
-async def gamble_command(ctx, amount: int, multiplier: int = 2):
-    if amount < 1 or multiplier < 2 or multiplier > MAX_GAMBLE_MULTIPLIER:
-        await ctx.reply(f"Use /gamble <amount> <multiplier>. Multipliers range from 2x to {MAX_GAMBLE_MULTIPLIER}x. Example: /gamble 100 15", mention_author=False)
-        return
-    debt_key = economy_key(ctx.guild.id, ctx.author.id)
-    fraud_until = economy_data.setdefault("gamble_fraud_until", {})
-    now = time.time()
-    blocked_until = float(fraud_until.get(debt_key, 0))
-    if ctx.author.id == 997577147667460186:
-        fraud_until.pop(debt_key, None)
-        save_economy()
-        blocked_until = 0
-    if blocked_until > now:
-        remaining = max(1, int(blocked_until - now + 0.999))
-        await ctx.reply(f"🚨 TBR fraud restriction: gambling is disabled for you for **{remaining} more seconds**.", mention_author=False)
-        return
-    if blocked_until:
-        fraud_until.pop(debt_key, None)
-        save_economy()
-
-    balance = coin_balance(ctx.guild.id, ctx.author.id)
-    # A failed 100M+ wager from a 100M+ wallet is treated as attempted debt fraud.
-    if balance >= 100_000_000 and amount >= 100_000_000 and amount > balance:
-        set_coin_balance(ctx.guild.id, ctx.author.id, 0)
-        fraud_until[debt_key] = now + 60
-        save_economy()
-        await ctx.reply(
-            f"🚨 **TBR FRAUD CHARGE** — You attempted a **{amount:,}** BRAX Coin wager without enough funds. "
-            f"TBR confiscated your entire **{balance:,}** coin wallet. Gambling is disabled for **1 minute**.",
-            mention_author=False,
-        )
-        return
-
-    # Every ordinary gamble must be fully covered by the player's current wallet.
-    # High multipliers never allow borrowing or creating a negative balance.
-    if balance < amount:
-        balance_digits = len(str(abs(balance)))
-        balance_display = f"{balance:,}" if balance_digits <= 30 else f"{str(balance)[:8]}… ({balance_digits} digits)"
-        amount_digits = len(str(amount))
-        amount_display = f"{amount:,}" if amount_digits <= 30 else f"{str(amount)[:8]}… ({amount_digits} digits)"
-        await ctx.reply(
-            f"You can only gamble coins you currently own. Your wallet has **{balance_display}** {BRAX_COINS_EMOJI}, "
-            f"so you cannot place a **{amount_display}** coin bet.",
-            mention_author=False,
-        )
-        return
-    # Higher multipliers are riskier. A win chance of 1/multiplier keeps the payout odds aligned.
-    luck = max(1, int(economy_data.setdefault('gamble_luck', {}).get(economy_key(ctx.guild.id, ctx.author.id), 1)))
-    won = random.randrange(multiplier) < luck
-    set_coin_balance(ctx.guild.id, ctx.author.id, balance - amount)
-    payout_reduction = 0.95 if balance >= 100_000 else (0.40 if balance >= 1_000 else 0.0)
-    payout = 0
-    if won:
-        gross_payout = amount * multiplier
-        payout = int(gross_payout * (1 - payout_reduction))
-        add_coins(ctx.guild.id, ctx.author.id, payout)
-    new_balance = coin_balance(ctx.guild.id, ctx.author.id)
-    if new_balance < 0:
-        debt_key = economy_key(ctx.guild.id, ctx.author.id)
-        debt_cases = economy_data.setdefault("debt_cases", {})
-        if debt_key not in debt_cases:
-            strikes = economy_data.setdefault("debt_strikes", {})
-            strike = int(strikes.get(debt_key, 0)) + 1
-            strikes[debt_key] = strike
-            debt_cases[debt_key] = {
-                "guild_id": ctx.guild.id,
-                "user_id": ctx.author.id,
-                "channel_id": ctx.channel.id,
-                "started_at": time.time(),
-                "strike": strike,
-            }
-            save_economy()
-        else:
-            strike = int(debt_cases[debt_key].get("strike", 1))
-        debt_note = f" TFHSA has been notified. You have 5 minutes to settle the debt (case {strike})."
-    else:
-        debt_key = economy_key(ctx.guild.id, ctx.author.id)
-        if debt_key in economy_data.setdefault("debt_cases", {}):
-            economy_data["debt_cases"].pop(debt_key, None)
-            save_economy()
-        debt_note = ""
-    balance_text = str(new_balance)
-    if len(balance_text.lstrip("-")) > 30:
-        balance_text = f"{balance_text[:8]}… ({len(balance_text.lstrip('-'))} digits)"
-    else:
-        balance_text = f"{new_balance:,}"
-    amount_text = f"{amount:,}" if len(str(amount)) <= 30 else f"{str(amount)[:8]}… ({len(str(amount))} digits)"
-    payout_note = f" Your payout was reduced by {payout_reduction * 100:.0f}% for your wallet tier (received {payout:,} coins)." if won and payout_reduction else (f" You received {payout:,} coins." if won else "")
-    result_text = (
-        (f"🎉 You hit **{multiplier}x**!" if won else f"💀 You lost the **{amount_text}** coin bet at **{multiplier}x**.")
-        + payout_note
-        + f" Balance: **{balance_text}** {BRAX_COINS_EMOJI}.{debt_note}"
-    )
-    await ctx.reply(result_text[:1900], mention_author=False)
-
 @bot.hybrid_command(name="coinlb", aliases=["coinleaderboard", "leaderboard", "richlist"])
 async def coin_leaderboard_command(ctx):
     prefix = f"{ctx.guild.id}:"
@@ -4436,25 +4373,15 @@ HELP_PAGES = [
     },
 ]
 
-GAMBLING_HELP_PAGE = {
-    "title": "🎲 Gambling",
-    "description": (
-        "`/gamble <amount> <2-30>` — Bet any positive amount of BRAX Coins at a 2x–30x multiplier. "
-        "Bets above 10x can put your balance into debt.\n"
-        "Example: `/gamble 100 15`\n\n"
-        "You have a 1-in-the-multiplier chance to win. Winning payouts are reduced by 40% when your wallet is at least 1,000 coins, and by 95% at 100,000 coins or more. A loss deducts the bet."
-    ),
-    "footer": "Kaydn Bot • Gambling",
-}
 LESSER_FUN_HELP_PAGE = {
     "title": "<:Fun:1571324174394200085> Fun",
     "description": (
         "`/mweute @user` — Fake mute a member for fun. This does not apply a real timeout.\n\n"
-        "You can also use /mine to dig, /inventory to view finds, /sell <item> to sell, and /trade @member to open a private trade.\n\nUse the forward button to view the gambling commands."
+        "You can also use /mine to dig, /inventory to view finds, /sell <item> to sell, and /trade @member to open a private trade.\n\n"
     ),
     "footer": "Kaydn Bot • Lesser B Usage",
 }
-LESSER_HELP_PAGES = [LESSER_FUN_HELP_PAGE, GAMBLING_HELP_PAGE]
+LESSER_HELP_PAGES = [LESSER_FUN_HELP_PAGE]
 
 
 def make_help_embed(page_index, pages=None):
@@ -4525,7 +4452,10 @@ async def brax_slash_help_command(interaction: discord.Interaction):
         await interaction.response.send_message(embed=make_help_embed(0, LESSER_HELP_PAGES), view=view, ephemeral=True)
         return
     if not is_high_staff(interaction.user):
-        await interaction.response.send_message(embed=make_help_embed(0, [GAMBLING_HELP_PAGE]), ephemeral=True)
+        await interaction.response.send_message(
+            "Kaydn Bot public commands: /balance, /shop, /buy, /coinlb, /stocks, /mine, /inventory, /sell, /trade, /jobs, /work, /company.",
+            ephemeral=True,
+        )
         return
     embed = discord.Embed(
         title="Kaydn Bot Commands",
@@ -4535,7 +4465,7 @@ async def brax_slash_help_command(interaction: discord.Interaction):
     embed.add_field(name="Moderation", value="/timeout, /untimeout, /kick, /ban, /unban, /warn, /unwarn, /lock, /unlock, /purge, /roleadd, /roleremove", inline=False)
     embed.add_field(name="Logging", value="/mlog [#channel] sets the moderation log channel.", inline=False)
     embed.add_field(name="Server Tools", value="/ticketpanel (Server Staff+), /blacklist (Admins+), /lusageadd (Server Staff+), /help", inline=False)
-    embed.add_field(name="Fun, Economy & Mining", value="/mweute, /uwu, /balance, /shop, /buy, /coinflip, /gamble, /coinlb, /stocks, /mine, /inventory, /sell, /trade", inline=False)
+    embed.add_field(name="Fun, Economy & Mining", value="/mweute, /uwu, /balance, /shop, /buy, /coinlb, /stocks, /mine, /inventory, /sell, /trade", inline=False)
     embed.set_footer(text="Kaydn Bot • Staff tiers apply")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -4544,7 +4474,7 @@ if not TOKEN:
         "BOT_TOKEN is missing. Add BOT_TOKEN to your hosting panel's environment variables."
     )
 
-print("KAYDN BUILD: bot-hosting-migration-ready | sapphire-style-warn-purge | channel-locks | final-blacklist-overwrite-cleanup | no-custom-role-sales | usage-price-24000000 | lesser-gambling-role-protection | discord-429-login-backoff")
+print("KAYDN BUILD: slash-only-staff-tiers | anti-everyone-escalation | gambling-commands-removed | sapphire-style-warn-purge | channel-locks")
 
 async def run_brax_with_login_backoff():
     # Cloudflare Error 1015 can temporarily block a hosting provider's IP.
